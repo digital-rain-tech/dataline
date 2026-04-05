@@ -6,6 +6,9 @@ description = "CJK-native master data matching engine"
 license = "Apache-2.0"
 repository = "https://github.com/digital-rain-tech/dataline"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 # String similarity
 strsim = "0.11"
@@ -18,11 +21,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # CJK text processing
-jieba-rs = "0.7"
-# rust-pinyin and opencc-rust added once we validate API stability
+jieba-rs = { version = "0.7", optional = true }
+pinyin = "0.11"
+
+# WASM bindings
+wasm-bindgen = { version = "0.2", optional = true }
 
 # Error handling
 thiserror = "2"
+
+[features]
+default = ["jieba"]
+jieba = ["dep:jieba-rs"]
+wasm = ["dep:wasm-bindgen"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

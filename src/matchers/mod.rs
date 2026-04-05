@@ -157,6 +157,7 @@ pub struct CjkSignalResult {
 pub struct CjkMultiSignalMatcher {
     pub combine: CombineStrategy,
     stroke_dict: signals::StrokeDict,
+    norm_dict: signals::NormDict,
 }
 
 impl CjkMultiSignalMatcher {
@@ -164,6 +165,7 @@ impl CjkMultiSignalMatcher {
         Self {
             combine,
             stroke_dict: signals::StrokeDict::default(),
+            norm_dict: signals::NormDict::default(),
         }
     }
 
@@ -172,7 +174,6 @@ impl CjkMultiSignalMatcher {
         let a_chars: Vec<char> = a.chars().filter(|c| !c.is_whitespace()).collect();
         let b_chars: Vec<char> = b.chars().filter(|c| !c.is_whitespace()).collect();
 
-        // If lengths differ significantly, unlikely to be the same name
         if a_chars.is_empty() || b_chars.is_empty() {
             return CjkSignalResult {
                 phonetic: 0.0,
@@ -183,10 +184,8 @@ impl CjkMultiSignalMatcher {
             };
         }
 
-        // Normalization check (exact match after S↔T conversion)
-        // TODO: integrate OpenCC for real S↔T conversion
-        let is_norm = a_chars == b_chars;
-        if is_norm {
+        // Exact character match
+        if a_chars == b_chars {
             return CjkSignalResult {
                 phonetic: 1.0,
                 visual: 1.0,
@@ -196,12 +195,22 @@ impl CjkMultiSignalMatcher {
             };
         }
 
-        // Visual signal: stroke-sequence similarity
+        // Normalization check: S↔T variant detection via OpenCC dictionaries
+        let is_norm = self.norm_dict.are_string_variants(&a_chars, &b_chars);
+        if is_norm {
+            return CjkSignalResult {
+                phonetic: 1.0,
+                visual: 1.0,
+                is_normalization_match: true,
+                combined: 1.0,
+                explanation: "S↔T normalization match".to_string(),
+            };
+        }
+
+        // Visual signal: stroke-sequence similarity (20K+ char dictionary)
         let visual = self.stroke_dict.compare_strings(&a_chars, &b_chars);
 
-        // Phonetic signal: pinyin-based similarity
-        // TODO: integrate rust-pinyin for real pinyin conversion
-        // For now, use a placeholder that does character-level comparison
+        // Phonetic signal: real pinyin conversion + DimSim coordinate distance
         let phonetic = signals::pinyin_similarity(&a_chars, &b_chars);
 
         // Combine

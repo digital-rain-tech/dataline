@@ -12,3 +12,6 @@ pub mod matchers;
 pub mod survivorship;
 pub mod tokenizers;
 pub mod types;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;

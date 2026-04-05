@@ -235,11 +235,13 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "jieba-rs",
+ "pinyin",
  "rayon",
  "serde",
  "serde_json",
  "strsim",
  "thiserror",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -518,6 +520,12 @@ checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
 dependencies = [
  "siphasher",
 ]
+
+[[package]]
+name = "pinyin"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e225f595052d9c46045755be4b8d7950b6d9f3c33e0c0b74ba58f11bbfa8c64b"
 
 [[package]]
 name = "pkg-config"
