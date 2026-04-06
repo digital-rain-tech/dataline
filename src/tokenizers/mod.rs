@@ -6,15 +6,45 @@
 //! - Simplified/Traditional normalization via OpenCC
 //! - Mixed-script detection (陳大文 vs Chan Tai Man)
 
+/// Script classification for a string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptType {
+    Cjk,
+    Latin,
+    Mixed,
+}
+
+/// Classify a string as CJK-dominant, Latin-dominant, or mixed.
+pub fn detect_script(s: &str) -> ScriptType {
+    let mut cjk_count = 0;
+    let mut latin_count = 0;
+    for c in s.chars() {
+        if is_cjk_char(c) {
+            cjk_count += 1;
+        } else if c.is_ascii_alphabetic() {
+            latin_count += 1;
+        }
+    }
+    if cjk_count > 0 && latin_count == 0 {
+        ScriptType::Cjk
+    } else if latin_count > 0 && cjk_count == 0 {
+        ScriptType::Latin
+    } else {
+        ScriptType::Mixed
+    }
+}
+
+pub fn is_cjk_char(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{F900}'..='\u{FAFF}'
+    )
+}
+
 /// Detect whether a string contains CJK characters.
 pub fn contains_cjk(s: &str) -> bool {
-    s.chars().any(|c| {
-        matches!(c,
-            '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
-            | '\u{3400}'..='\u{4DBF}' // CJK Extension A
-            | '\u{F900}'..='\u{FAFF}' // CJK Compatibility Ideographs
-        )
-    })
+    s.chars().any(is_cjk_char)
 }
 
 /// Extract character n-grams from a CJK string.
@@ -61,5 +91,12 @@ mod tests {
     fn test_short_string() {
         let bigrams = cjk_ngrams("陳", 2);
         assert_eq!(bigrams, vec!["陳"]);
+    }
+
+    #[test]
+    fn test_detect_script() {
+        assert_eq!(detect_script("陳大文"), ScriptType::Cjk);
+        assert_eq!(detect_script("Chan Tai Man"), ScriptType::Latin);
+        assert_eq!(detect_script("Chan 陳"), ScriptType::Mixed);
     }
 }

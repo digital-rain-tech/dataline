@@ -158,6 +158,7 @@ pub struct CjkMultiSignalMatcher {
     pub combine: CombineStrategy,
     stroke_dict: signals::StrokeDict,
     norm_dict: signals::NormDict,
+    jyutping_dict: signals::JyutpingDict,
 }
 
 impl CjkMultiSignalMatcher {
@@ -166,11 +167,95 @@ impl CjkMultiSignalMatcher {
             combine,
             stroke_dict: signals::StrokeDict::default(),
             norm_dict: signals::NormDict::default(),
+            jyutping_dict: signals::JyutpingDict::default(),
         }
     }
 
-    /// Compare two CJK strings character-by-character, producing per-signal scores.
+    /// Compare two strings, producing per-signal scores.
+    ///
+    /// Handles three cases:
+    /// - Both CJK: multi-signal matching (phonetic + visual + normalization)
+    /// - Both Latin: Jaro-Winkler
+    /// - Mixed scripts (CJK vs Latin): cross-script romanization matching
     pub fn compare_detailed(&self, a: &str, b: &str) -> CjkSignalResult {
+        let a_script = tokenizers::detect_script(a);
+        let b_script = tokenizers::detect_script(b);
+
+        // Cross-script: different dominant scripts, or either side is mixed.
+        // Extract CJK characters from one side and Latin tokens from the other.
+        let a_has_cjk = a_script == tokenizers::ScriptType::Cjk
+            || a_script == tokenizers::ScriptType::Mixed;
+        let b_has_cjk = b_script == tokenizers::ScriptType::Cjk
+            || b_script == tokenizers::ScriptType::Mixed;
+        let a_has_latin = a_script == tokenizers::ScriptType::Latin
+            || a_script == tokenizers::ScriptType::Mixed;
+        let b_has_latin = b_script == tokenizers::ScriptType::Latin
+            || b_script == tokenizers::ScriptType::Mixed;
+
+        let is_cross_script = (a_has_cjk && !b_has_cjk && b_has_latin)
+            || (b_has_cjk && !a_has_cjk && a_has_latin)
+            || (a_script == tokenizers::ScriptType::Mixed
+                || b_script == tokenizers::ScriptType::Mixed)
+                && a_script != b_script;
+
+        if is_cross_script {
+            // Extract CJK chars from whichever side has them,
+            // and Latin tokens from the other side.
+            let (cjk_source, latin_source) = if a_has_cjk && !a_has_latin {
+                (a, b)
+            } else if b_has_cjk && !b_has_latin {
+                (b, a)
+            } else if a_has_cjk {
+                // a is Mixed or CJK, b is Latin or Mixed — use CJK from a, Latin from b
+                (a, b)
+            } else {
+                (b, a)
+            };
+
+            let cjk_chars: Vec<char> = cjk_source
+                .chars()
+                .filter(|c| !c.is_whitespace() && tokenizers::is_cjk_char(*c))
+                .collect();
+            // Extract Latin tokens from the latin source
+            let latin_tokens: String = latin_source
+                .chars()
+                .filter(|c| c.is_ascii_alphabetic() || c.is_whitespace())
+                .collect();
+
+            if !cjk_chars.is_empty() && !latin_tokens.trim().is_empty() {
+                let phonetic = signals::cross_script_similarity(
+                    &cjk_chars,
+                    &latin_tokens,
+                    &self.jyutping_dict,
+                );
+                return CjkSignalResult {
+                    phonetic,
+                    visual: 0.0,
+                    is_normalization_match: false,
+                    combined: phonetic,
+                    explanation: format!("cross-script: phonetic {phonetic:.2}"),
+                };
+            }
+        }
+
+        // Both Latin: use Jaro-Winkler
+        if a_script == tokenizers::ScriptType::Latin
+            && b_script == tokenizers::ScriptType::Latin
+        {
+            let score = strsim::jaro_winkler(
+                &a.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase(),
+                &b.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase(),
+            );
+            return CjkSignalResult {
+                phonetic: score,
+                visual: 0.0,
+                is_normalization_match: false,
+                combined: score,
+                explanation: format!("latin jaro-winkler: {score:.2}"),
+            };
+        }
+
+        // Both CJK (or mixed): multi-signal matching
         let a_chars: Vec<char> = a.chars().filter(|c| !c.is_whitespace()).collect();
         let b_chars: Vec<char> = b.chars().filter(|c| !c.is_whitespace()).collect();
 
@@ -207,11 +292,19 @@ impl CjkMultiSignalMatcher {
             };
         }
 
-        // Visual signal: stroke-sequence similarity (20K+ char dictionary)
+        // Visual signal: stroke-sequence similarity
         let visual = self.stroke_dict.compare_strings(&a_chars, &b_chars);
 
-        // Phonetic signal: real pinyin conversion + DimSim coordinate distance
-        let phonetic = signals::pinyin_similarity(&a_chars, &b_chars);
+        // Phonetic signal: max(Mandarin pinyin, Cantonese Jyutping)
+        let mandarin = signals::pinyin_similarity(&a_chars, &b_chars);
+        let cantonese =
+            signals::jyutping_similarity(&a_chars, &b_chars, &self.jyutping_dict);
+        let phonetic = mandarin.max(cantonese);
+        let phonetic_source = if cantonese > mandarin {
+            "Cantonese"
+        } else {
+            "Mandarin"
+        };
 
         // Combine
         let combined = match self.combine {
@@ -234,7 +327,7 @@ impl CjkMultiSignalMatcher {
                 if phonetic >= phonetic_threshold || visual >= visual_threshold {
                     phonetic.max(visual)
                 } else {
-                    phonetic.max(visual) * 0.5 // Penalty: neither exceeded threshold
+                    phonetic.max(visual) * 0.5
                 }
             }
         };
@@ -246,12 +339,12 @@ impl CjkMultiSignalMatcher {
             )
         } else if phonetic > 0.8 && visual < 0.3 {
             format!(
-                "phonetic match ({phonetic:.2}) despite low visual ({visual:.2}) — likely dialect/romanization variant"
+                "phonetic match ({phonetic:.2} {phonetic_source}) despite low visual ({visual:.2}) — likely dialect/romanization variant"
             )
         } else if phonetic > 0.7 && visual > 0.7 {
-            format!("strong match: phonetic {phonetic:.2}, visual {visual:.2}")
+            format!("strong match: phonetic {phonetic:.2} ({phonetic_source}), visual {visual:.2}")
         } else {
-            format!("phonetic {phonetic:.2}, visual {visual:.2}")
+            format!("phonetic {phonetic:.2} ({phonetic_source}), visual {visual:.2}")
         };
 
         CjkSignalResult {
@@ -354,5 +447,50 @@ mod tests {
         // structure should be there
         assert!(result.phonetic >= 0.0 && result.phonetic <= 1.0);
         assert!(result.visual >= 0.0 && result.visual <= 1.0);
+    }
+
+    #[test]
+    fn test_multi_signal_cross_script() {
+        let m = CjkMultiSignalMatcher::new(CombineStrategy::Max);
+        let result = m.compare_detailed("陳大文", "Chan Tai Man");
+        assert!(
+            result.phonetic > 0.7,
+            "Expected cross-script match > 0.7, got {}",
+            result.phonetic
+        );
+        assert_eq!(result.visual, 0.0); // N/A for cross-script
+    }
+
+    #[test]
+    fn test_multi_signal_latin_only() {
+        let m = CjkMultiSignalMatcher::new(CombineStrategy::Max);
+        let result = m.compare_detailed("Chan Tai Man", "CHAN Tai-man");
+        assert!(
+            result.combined > 0.9,
+            "Expected Latin match > 0.9, got {}",
+            result.combined
+        );
+    }
+
+    #[test]
+    fn test_multi_signal_st_still_works() {
+        let m = CjkMultiSignalMatcher::new(CombineStrategy::Max);
+        let result = m.compare_detailed("陳大文", "陈大文");
+        assert_eq!(result.combined, 1.0);
+        assert!(result.is_normalization_match);
+    }
+
+    #[test]
+    fn test_multi_signal_mixed_script_input() {
+        // Regression: "Chan 陳" (Mixed) vs "Chan Tai Man" (Latin)
+        // should route to cross-script, not fall through to CJK matcher
+        let m = CjkMultiSignalMatcher::new(CombineStrategy::Max);
+        let result = m.compare_detailed("陳大文", "Chan 陳");
+        // Should produce some cross-script score, not crash or score 0
+        assert!(
+            result.combined > 0.0,
+            "Mixed-script input should produce a score, got {}",
+            result.combined
+        );
     }
 }

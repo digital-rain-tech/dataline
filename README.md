@@ -54,6 +54,14 @@ cargo test
 cargo bench    # criterion benchmarks for matchers and tokenizers
 ```
 
+## Architecture decisions
+
+See `docs/adr/` for detailed rationale:
+
+- [ADR-001](docs/adr/001-competitive-landscape-and-building-blocks.md) — Why Rust, competitive landscape, building blocks survey
+- [ADR-002](docs/adr/002-parallelism-not-distribution.md) — Rayon parallelism over distributed architecture (scales to 10M+ records on commodity hardware)
+- [ADR-003](docs/adr/003-multi-signal-cjk-matching.md) — Multi-signal CJK matching design and why phonetic-only fails
+
 ## Data
 
 All signal dictionaries are embedded at compile time from `data/`:
@@ -61,10 +69,21 @@ All signal dictionaries are embedded at compile time from `data/`:
 | File | Source | Size | Contents |
 |------|--------|------|----------|
 | `dict_chinese_stroke.txt` | [FuzzyChinese](https://github.com/Luminoso-AI/FuzzyChinese) | 892KB | Stroke decompositions for 20,901 CJK characters |
+| `dict_cantonese_jyutping.txt` | [cpp-pinyin](https://github.com/AnyListen/cpp-pinyin) | 488KB | Cantonese Jyutping readings for 19,482 characters |
 | `STCharacters.txt` | [OpenCC](https://github.com/BYVoid/OpenCC) | 35KB | Simplified → Traditional mappings (3,980 entries) |
 | `TSCharacters.txt` | [OpenCC](https://github.com/BYVoid/OpenCC) | 35KB | Traditional → Simplified mappings (4,113 entries) |
 
-Phonetic similarity uses [rust-pinyin](https://crates.io/crates/pinyin) for character-to-pinyin conversion and [DimSim](https://github.com/Wikipedia2008/DimSim)-style 2D coordinate distance for consonant/vowel similarity scoring.
+Phonetic similarity uses [rust-pinyin](https://crates.io/crates/pinyin) for Mandarin pinyin conversion and a Cantonese Jyutping dictionary for dual-dialect matching, both with [DimSim](https://github.com/Wikipedia2008/DimSim)-style 2D coordinate distance for consonant/vowel similarity scoring.
+
+## Cross-script matching
+
+Dataline matches CJK characters against Latin romanizations:
+
+```
+陳大文 vs "Chan Tai Man" → cross-script phonetic match (869ns)
+```
+
+Uses a Jyutping-to-HK-romanization equivalence table (~45 common syllable mappings) with Jaro-Winkler fallback. Handles mixed-script inputs (`Chan 陳`).
 
 ## Browser demo
 
@@ -74,13 +93,12 @@ The matching engine compiles to WebAssembly via `wasm-pack`:
 wasm-pack build --target web --no-default-features --features wasm
 ```
 
-This produces a ~1.4MB `.wasm` binary (dictionaries included) that runs entirely in the browser — no server needed. Try the [live demo](https://dataline.dev).
+This produces a ~1.6MB `.wasm` binary (dictionaries included) that runs entirely in the browser — no server needed. Try the [live demo](https://dataline.dev).
 
 ## Current status
 
-Early development. All three matching signals are implemented and working. Remaining work:
+Early development. All matching signals implemented and working including cross-script. Remaining work:
 
-- Cantonese (Jyutping) phonetic matching
 - Clustering stage (grouping matched pairs into entities)
 - PyO3 Python bindings
 
