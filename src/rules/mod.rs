@@ -56,13 +56,13 @@ pub struct NodeResults {
     pub family_missing: bool, // One or both sides have no family name
 
     // Given name nodes
-    pub given_exact: bool,     // All given name tokens match exactly
-    pub given_synonym: bool,   // At least one token matched via synonym
-    pub given_st: bool,        // All given name tokens are S↔T variants
+    pub given_exact: bool,        // All given name tokens match exactly
+    pub given_synonym: bool,      // At least one token matched via synonym
+    pub given_st: bool,           // All given name tokens are S↔T variants
     pub given_romanization: bool, // Cross-script given name match
-    pub given_jw: f64,         // Best Jaro-Winkler score across given name tokens
-    pub given_missing: bool,   // One or both sides have no given names
-    pub given_partial: bool,   // Some but not all given name tokens match (>0.8)
+    pub given_jw: f64,            // Best Jaro-Winkler score across given name tokens
+    pub given_missing: bool,      // One or both sides have no given names
+    pub given_partial: bool,      // Some but not all given name tokens match (>0.8)
 
     // CJK-specific given name nodes (order-preserving)
     /// Ordered character overlap: longest common subsequence / max length.
@@ -79,10 +79,10 @@ pub struct NodeResults {
     pub suffix_match: bool,
 
     // Corroboration nodes (independent signals beyond name)
-    pub phone_match: bool,      // Same phone number (exact or last 4 digits)
-    pub email_match: bool,      // Same email address
-    pub dob_match: bool,        // Same date of birth
-    pub address_match: bool,    // Same or similar address
+    pub phone_match: bool, // Phone: exact OR 7/8 digits match (needs family+given name to be useful)
+    pub email_match: bool, // Same email address
+    pub dob_match: bool,   // Same date of birth
+    pub district_match: bool, // Same district (weak signal, not corroboration)
     /// True if ANY corroboration signal matches.
     pub any_corroboration: bool,
 }
@@ -159,25 +159,50 @@ impl RuleMatcher {
             };
 
         // ─── Given name nodes ───
-        let (given_exact, given_synonym, given_st, given_romanization, given_jw, given_missing, given_partial) =
-            if a.given.is_empty() && b.given.is_empty() {
-                (true, false, false, false, 1.0, true, false)
-            } else if a.given.is_empty() || b.given.is_empty() {
-                (false, false, false, false, 0.0, true, false)
-            } else {
-                self.evaluate_given_names(&a.given, &b.given)
-            };
+        // For Latin names, token-level S↔T doesn't apply (only work for CJK)
+        let a_has_cjk = a
+            .given
+            .iter()
+            .any(|t| t.chars().any(|c| tokenizers::is_cjk_char(c)));
+        let b_has_cjk = b
+            .given
+            .iter()
+            .any(|t| t.chars().any(|c| tokenizers::is_cjk_char(c)));
+
+        let (
+            given_exact,
+            given_synonym,
+            given_st,
+            given_romanization,
+            given_jw,
+            given_missing,
+            given_partial,
+        ) = if a.given.is_empty() && b.given.is_empty() {
+            (true, false, false, false, 1.0, true, false)
+        } else if a.given.is_empty() || b.given.is_empty() {
+            (false, false, false, false, 0.0, true, false)
+        } else {
+            let (exact, synonym, st, roman, jw, missing, partial) =
+                self.evaluate_given_names(&a.given, &b.given);
+            // Only use token-level ST match if both have CJK
+            let given_st = st && a_has_cjk && b_has_cjk;
+            (exact, synonym, given_st, roman, jw, missing, partial)
+        };
 
         // ─── CJK-specific given name nodes (order-preserving) ───
         // Character order is semantic in Chinese: 大文 ≠ 文大.
         // Use LCS (longest common subsequence) for ordered character overlap,
         // and ordered bigram Jaccard for sequence matching.
         let (given_char_lcs, given_bigram_jaccard) = {
-            let a_cjk_chars: Vec<char> = a.given.iter()
+            let a_cjk_chars: Vec<char> = a
+                .given
+                .iter()
                 .flat_map(|s| s.chars())
                 .filter(|c| tokenizers::is_cjk_char(*c))
                 .collect();
-            let b_cjk_chars: Vec<char> = b.given.iter()
+            let b_cjk_chars: Vec<char> = b
+                .given
+                .iter()
                 .flat_map(|s| s.chars())
                 .filter(|c| tokenizers::is_cjk_char(*c))
                 .collect();
@@ -186,29 +211,37 @@ impl RuleMatcher {
                 (0.0, 0.0)
             } else {
                 // Normalize S↔T before comparison
-                let a_norm: Vec<char> = a_cjk_chars.iter()
+                let a_norm: Vec<char> = a_cjk_chars
+                    .iter()
                     .map(|c| self.norm_dict.to_simplified(*c))
                     .collect();
-                let b_norm: Vec<char> = b_cjk_chars.iter()
+                let b_norm: Vec<char> = b_cjk_chars
+                    .iter()
                     .map(|c| self.norm_dict.to_simplified(*c))
                     .collect();
 
                 // LCS (longest common subsequence) — preserves order
                 let lcs_len = lcs_length(&a_norm, &b_norm);
                 let max_len = a_norm.len().max(b_norm.len());
-                let char_lcs = if max_len > 0 { lcs_len as f64 / max_len as f64 } else { 0.0 };
+                let char_lcs = if max_len > 0 {
+                    lcs_len as f64 / max_len as f64
+                } else {
+                    0.0
+                };
 
                 // Ordered bigram Jaccard (only if 2+ chars)
                 let bigram_jaccard = if a_norm.len() >= 2 && b_norm.len() >= 2 {
-                    let a_bigrams: std::collections::HashSet<(char, char)> = a_norm.windows(2)
-                        .map(|w| (w[0], w[1]))
-                        .collect();
-                    let b_bigrams: std::collections::HashSet<(char, char)> = b_norm.windows(2)
-                        .map(|w| (w[0], w[1]))
-                        .collect();
+                    let a_bigrams: std::collections::HashSet<(char, char)> =
+                        a_norm.windows(2).map(|w| (w[0], w[1])).collect();
+                    let b_bigrams: std::collections::HashSet<(char, char)> =
+                        b_norm.windows(2).map(|w| (w[0], w[1])).collect();
                     let bi_inter = a_bigrams.intersection(&b_bigrams).count();
                     let bi_union = a_bigrams.union(&b_bigrams).count();
-                    if bi_union > 0 { bi_inter as f64 / bi_union as f64 } else { 0.0 }
+                    if bi_union > 0 {
+                        bi_inter as f64 / bi_union as f64
+                    } else {
+                        0.0
+                    }
                 } else {
                     0.0
                 };
@@ -229,10 +262,18 @@ impl RuleMatcher {
         };
 
         // ─── Corroboration nodes ───
+        // Phone: exact match OR 7/8 digits match (needs family+given name to be useful)
         let phone_match = match (&a_fields.phone, &b_fields.phone) {
             (Some(ap), Some(bp)) if !ap.is_empty() && !bp.is_empty() => {
-                // Exact match or last 4 digits match
-                ap == bp || (ap.len() >= 4 && bp.len() >= 4 && ap[ap.len()-4..] == bp[bp.len()-4..])
+                // Exact match
+                ap == bp
+                // Or 7+/8+ digit match (allows some digit variation)
+                || (ap.len() >= 7 && bp.len() >= 7
+                    && ap.len() == bp.len()
+                    && ap[..7] == bp[..7])
+                || (ap.len() >= 8 && bp.len() >= 8
+                    && ap.len() == bp.len()
+                    && ap[..8] == bp[..8])
             }
             _ => false,
         };
@@ -249,14 +290,14 @@ impl RuleMatcher {
             _ => false,
         };
 
-        let address_match = match (&a_fields.district, &b_fields.district) {
+        let district_match = match (&a_fields.district, &b_fields.district) {
             (Some(aa), Some(ba)) if !aa.is_empty() && !ba.is_empty() => {
                 aa.to_lowercase() == ba.to_lowercase()
             }
             _ => false,
         };
 
-        let any_corroboration = phone_match || email_match || dob_match || address_match;
+        let any_corroboration = phone_match || email_match || dob_match;
 
         NodeResults {
             family_exact,
@@ -278,12 +319,20 @@ impl RuleMatcher {
             phone_match,
             email_match,
             dob_match,
-            address_match,
+            district_match,
             any_corroboration,
         }
     }
 
     fn are_st_variants(&self, a: &str, b: &str) -> bool {
+        let a_is_cjk = a.chars().any(|c| tokenizers::is_cjk_char(c));
+        let b_is_cjk = b.chars().any(|c| tokenizers::is_cjk_char(c));
+
+        // Only applies to CJK characters
+        if !a_is_cjk || !b_is_cjk {
+            return false;
+        }
+
         let a_chars: Vec<char> = a.chars().collect();
         let b_chars: Vec<char> = b.chars().collect();
         self.norm_dict.are_string_variants(&a_chars, &b_chars)
@@ -299,8 +348,7 @@ impl RuleMatcher {
 
         let (cjk, latin) = if a_is_cjk { (a, b) } else { (b, a) };
         let cjk_chars: Vec<char> = cjk.chars().collect();
-        let score =
-            signals::cross_script_similarity(&cjk_chars, latin, &self.jyutping_dict);
+        let score = signals::cross_script_similarity(&cjk_chars, latin, &self.jyutping_dict);
         score > 0.7
     }
 
@@ -310,9 +358,25 @@ impl RuleMatcher {
         b: &[String],
     ) -> (bool, bool, bool, bool, f64, bool, bool) {
         // Best-match alignment (same as names::compare_components)
-        let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+        // For exact match, we need same number of tokens AND same position matches
+        let a_len = a.len();
+        let b_len = b.len();
+        let same_len = a_len == b_len;
 
-        let mut all_exact = true;
+        // For exact: require exact match at same position
+        let mut all_exact = same_len;
+        if same_len {
+            for i in 0..a_len {
+                if a[i].to_lowercase() != b[i].to_lowercase() {
+                    all_exact = false;
+                    break;
+                }
+            }
+        }
+
+        // For synonyms/st/romanization: use best-match (allows reordering)
+        let (short, long) = if a_len <= b_len { (a, b) } else { (b, a) };
+
         let mut any_synonym = false;
         let mut all_st = true;
         let mut any_romanization = false;
@@ -369,9 +433,6 @@ impl RuleMatcher {
                 best_score = best_score.max(jw);
             }
 
-            if !best_is_exact {
-                all_exact = false;
-            }
             if best_is_synonym {
                 any_synonym = true;
             }
@@ -389,13 +450,18 @@ impl RuleMatcher {
 
         let partial = match_count > 0 && match_count < short.len();
 
-        // all_exact and all_st require SAME token count — different counts
-        // means different names even if the shorter one is a subset.
-        let same_len = a.len() == b.len();
-        let all_exact = all_exact && same_len;
+        // all_st requires SAME token count — different counts means different names.
         let all_st = all_st && same_len;
 
-        (all_exact, any_synonym, all_st, any_romanization, best_jw, false, partial)
+        (
+            all_exact,
+            any_synonym,
+            all_st,
+            any_romanization,
+            best_jw,
+            false,
+            partial,
+        )
     }
 
     /// Apply rules to pre-computed nodes and return the match decision.
@@ -405,8 +471,7 @@ impl RuleMatcher {
     /// - **Corroboration-required:** Ambiguous name match needs a second
     ///   independent signal (phone/email/DOB/address) to confirm (R4-R10)
     pub fn apply_rules(&self, nodes: &NodeResults) -> RuleDecision {
-        let family_matches =
-            nodes.family_exact || nodes.family_st || nodes.family_romanization;
+        let family_matches = nodes.family_exact || nodes.family_st || nodes.family_romanization;
 
         // ═══ Tier 1: Name-sufficient (no corroboration needed) ═══
 
@@ -419,9 +484,7 @@ impl RuleMatcher {
         }
 
         // R2: Family EXACT/S↔T + Given S↔T → Definite
-        if (nodes.family_exact || nodes.family_st)
-            && (nodes.given_exact || nodes.given_st)
-        {
+        if (nodes.family_exact || nodes.family_st) && (nodes.given_exact || nodes.given_st) {
             return RuleDecision {
                 classification: MatchConfidence::Definite,
                 rule: "R2: family S↔T + given S↔T".to_string(),
@@ -440,12 +503,27 @@ impl RuleMatcher {
         // Phone/email match is strong independent evidence.
         // If family matches AND phone matches, it's very likely the same person
         // regardless of given name comparison quality.
+        // But phone alone is weak — require at least a given name signal too.
+        // R3d: Family matches + phone exact match + given name signal → High
+        // Given signal can be: exact match, partial match, JW similarity, or romanization
+        let given_signal = nodes.given_exact
+            || nodes.given_partial
+            || nodes.given_jw > 0.85
+            || nodes.given_romanization
+            || nodes.given_st; // CJK S↔T is valid signal
 
-        // R3d: Family matches + phone exact match → High
-        if family_matches && nodes.phone_match {
+        if family_matches && nodes.phone_match && given_signal {
             return RuleDecision {
                 classification: MatchConfidence::High,
-                rule: "R3d: family match + phone match".to_string(),
+                rule: "R3d: family + phone + given signal".to_string(),
+            };
+        }
+
+        // R3d2: Full romanization + phone → High (cross-script with corroboration)
+        if nodes.family_romanization && nodes.given_romanization && nodes.phone_match {
+            return RuleDecision {
+                classification: MatchConfidence::High,
+                rule: "R3d2: full romanization + phone match".to_string(),
             };
         }
 
@@ -465,7 +543,10 @@ impl RuleMatcher {
         if family_matches && nodes.given_bigram_jaccard == 1.0 {
             return RuleDecision {
                 classification: MatchConfidence::High,
-                rule: format!("R3b: family match + CJK given bigram exact (J={:.2})", nodes.given_bigram_jaccard),
+                rule: format!(
+                    "R3b: family match + CJK given bigram exact (J={:.2})",
+                    nodes.given_bigram_jaccard
+                ),
             };
         }
 
@@ -474,7 +555,10 @@ impl RuleMatcher {
         if family_matches && nodes.given_char_lcs >= 0.5 && nodes.any_corroboration {
             return RuleDecision {
                 classification: MatchConfidence::Medium,
-                rule: format!("R3c: family match + CJK given LCS {:.0}% + corroborated", nodes.given_char_lcs * 100.0),
+                rule: format!(
+                    "R3c: family match + CJK given LCS {:.0}% + corroborated",
+                    nodes.given_char_lcs * 100.0
+                ),
             };
         }
 
@@ -512,17 +596,28 @@ impl RuleMatcher {
             };
         }
 
-        // R6: Family match + Given JW > 0.9 (near-exact, likely typo)
-        if family_matches && nodes.given_jw > 0.9 {
+        // R6: REMOVED - token-level JW is too loose, causes false positives
+        // R6b below handles CJK via bigrams
+        // Cross-script handled by R4/R5/R7
+
+        // R6b: Family match + CJK given bigram Jaccard >= 0.5 — for CJK names
+        // Bigram Jaccard treats character bigrams as atomic units (e.g., "大文" = "大文" not "大"+"文")
+        if family_matches && nodes.given_bigram_jaccard >= 0.5 {
             return if nodes.any_corroboration {
                 RuleDecision {
                     classification: MatchConfidence::High,
-                    rule: format!("R6: family match + given JW {:.2} + corroborated", nodes.given_jw),
+                    rule: format!(
+                        "R6b: family match + given bigram J {:.2} + corroborated",
+                        nodes.given_bigram_jaccard
+                    ),
                 }
             } else {
                 RuleDecision {
                     classification: MatchConfidence::Medium,
-                    rule: format!("R6: family match + given JW {:.2} (uncorroborated)", nodes.given_jw),
+                    rule: format!(
+                        "R6b: family match + given bigram J {:.2} (uncorroborated)",
+                        nodes.given_bigram_jaccard
+                    ),
                 }
             };
         }
@@ -567,7 +662,8 @@ impl RuleMatcher {
             } else {
                 RuleDecision {
                     classification: MatchConfidence::NonMatch,
-                    rule: "R9: family match + given missing (uncorroborated — insufficient)".to_string(),
+                    rule: "R9: family match + given missing (uncorroborated — insufficient)"
+                        .to_string(),
                 }
             };
         }
@@ -723,8 +819,14 @@ mod tests {
         let matcher = RuleMatcher::default();
         let a = names::parse_components("陳大文先生");
         let b = names::parse_components("CHAN Tai Man");
-        let a_f = RecordFields { phone: Some("91234567".to_string()), ..Default::default() };
-        let b_f = RecordFields { phone: Some("91234567".to_string()), ..Default::default() };
+        let a_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
         let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
         let decision = matcher.apply_rules(&nodes);
         assert_eq!(
@@ -779,15 +881,46 @@ mod tests {
     }
 
     #[test]
-    fn test_nodes_computed_once() {
+    fn test_phone_robustness() {
         let matcher = RuleMatcher::default();
-        let a = names::parse_components("陳大文先生");
+
+        // Case 1: Same family, same phone, different given - should NOT match
+        let a = names::parse_components("KWAN Suet Ling");
+        let b = names::parse_components("KWAN Nga Man");
+        let a_f = RecordFields {
+            phone: Some("90435706".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("90435706".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        let decision = matcher.apply_rules(&nodes);
+        assert_eq!(
+            decision.classification,
+            MatchConfidence::NonMatch,
+            "Same family, different given, same phone should NOT match"
+        );
+
+        // Case 2: Same family, same given, same phone - should match
+        let a = names::parse_components("CHAN Tai Man");
         let b = names::parse_components("CHAN Tai Man");
-        let empty = RecordFields::default();
-        let nodes1 = matcher.evaluate_nodes(&a, &b, &empty, &empty);
-        let nodes2 = matcher.evaluate_nodes(&a, &b, &empty, &empty);
-        assert_eq!(nodes1.family_romanization, nodes2.family_romanization);
-        assert_eq!(nodes1.given_romanization, nodes2.given_romanization);
+        let a_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        let decision = matcher.apply_rules(&nodes);
+        assert!(
+            decision.classification >= MatchConfidence::High,
+            "Same name + same phone should match: {:?}",
+            decision
+        );
     }
 
     // ─── Corroboration tests ───
@@ -804,15 +937,22 @@ mod tests {
         let decision_no = matcher.apply_rules(&nodes_no);
 
         // With corroboration (same phone): High
-        let a_fields = RecordFields { phone: Some("91234567".to_string()), ..Default::default() };
-        let b_fields = RecordFields { phone: Some("91234567".to_string()), ..Default::default() };
+        let a_fields = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_fields = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
         let nodes_yes = matcher.evaluate_nodes(&a, &b, &a_fields, &b_fields);
         let decision_yes = matcher.apply_rules(&nodes_yes);
 
         assert!(
             decision_yes.classification > decision_no.classification,
             "Corroboration should upgrade: {:?} vs {:?}",
-            decision_yes, decision_no
+            decision_yes,
+            decision_no
         );
     }
 
@@ -832,8 +972,14 @@ mod tests {
         // Same but with matching phone → Review
         let a = names::parse_components("CHAN");
         let b = names::parse_components("CHAN Tai Man");
-        let a_f = RecordFields { phone: Some("91234567".to_string()), ..Default::default() };
-        let b_f = RecordFields { phone: Some("91234567".to_string()), ..Default::default() };
+        let a_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
         let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
         let decision = matcher.apply_rules(&nodes);
         assert_eq!(
@@ -845,14 +991,46 @@ mod tests {
     }
 
     #[test]
-    fn test_phone_last_4_match() {
+    fn test_phone_7_or_8_digits() {
         let matcher = RuleMatcher::default();
         let a = names::parse_components("陳大文");
         let b = names::parse_components("CHAN Tai Man");
-        let a_f = RecordFields { phone: Some("+852-9123-4567".to_string()), ..Default::default() };
-        let b_f = RecordFields { phone: Some("91234567".to_string()), ..Default::default() };
+
+        // Exact match
+        let a_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
         let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
-        assert!(nodes.phone_match, "Last 4 digits should match: 4567 = 4567");
+        assert!(nodes.phone_match, "Exact phone should match");
+
+        // First 7 digits match (8-digit numbers)
+        let a_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("91234568".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        assert!(nodes.phone_match, "First 7 digits should match");
+
+        // Last 4 digits only — should NOT match
+        let a_f = RecordFields {
+            phone: Some("12344567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("98785670".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        assert!(!nodes.phone_match, "Only last 4 digits should NOT match");
     }
 
     #[test]
@@ -860,8 +1038,14 @@ mod tests {
         let matcher = RuleMatcher::default();
         let a = names::parse_components("陳大文");
         let b = names::parse_components("CHAN Tai Man");
-        let a_f = RecordFields { email: Some("chan.tw@gmail.com".to_string()), ..Default::default() };
-        let b_f = RecordFields { email: Some("chan.tw@gmail.com".to_string()), ..Default::default() };
+        let a_f = RecordFields {
+            email: Some("chan.tw@gmail.com".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            email: Some("chan.tw@gmail.com".to_string()),
+            ..Default::default()
+        };
         let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
         assert!(nodes.email_match);
         assert!(nodes.any_corroboration);
@@ -874,13 +1058,28 @@ mod tests {
         let b = names::parse_components("LAI Wai Wing, Eric");
         eprintln!("A: family={:?} given={:?}", a.family, a.given);
         eprintln!("B: family={:?} given={:?}", b.family, b.given);
-        let a_f = RecordFields { phone: Some("92311536".to_string()), ..Default::default() };
-        let b_f = RecordFields { phone: Some("92311536".to_string()), ..Default::default() };
+        let a_f = RecordFields {
+            phone: Some("92311536".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("92311536".to_string()),
+            ..Default::default()
+        };
         let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
-        eprintln!("family_exact={} family_st={} family_roman={}", nodes.family_exact, nodes.family_st, nodes.family_romanization);
-        eprintln!("phone_match={} any_corroboration={}", nodes.phone_match, nodes.any_corroboration);
+        eprintln!(
+            "family_exact={} family_st={} family_roman={}",
+            nodes.family_exact, nodes.family_st, nodes.family_romanization
+        );
+        eprintln!(
+            "phone_match={} any_corroboration={}",
+            nodes.phone_match, nodes.any_corroboration
+        );
         let decision = matcher.apply_rules(&nodes);
-        eprintln!("Decision: {:?} rule={}", decision.classification, decision.rule);
+        eprintln!(
+            "Decision: {:?} rule={}",
+            decision.classification, decision.rule
+        );
         // This pair should match — same phone!
         assert!(
             decision.classification >= MatchConfidence::High,
@@ -901,7 +1100,8 @@ mod tests {
         // LCS(大文, 大明) = 1 (大) → 1/2 = 0.5
         assert!(
             (nodes.given_char_lcs - 0.5).abs() < 0.01,
-            "Expected 0.5, got {}", nodes.given_char_lcs
+            "Expected 0.5, got {}",
+            nodes.given_char_lcs
         );
     }
 
@@ -915,7 +1115,8 @@ mod tests {
         let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
         assert!(
             (nodes.given_char_lcs - 0.5).abs() < 0.01,
-            "大文 vs 文大 should be LCS 0.5 (order matters), got {}", nodes.given_char_lcs
+            "大文 vs 文大 should be LCS 0.5 (order matters), got {}",
+            nodes.given_char_lcs
         );
         assert_eq!(
             nodes.given_bigram_jaccard, 0.0,
@@ -956,7 +1157,8 @@ mod tests {
         let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
         assert_eq!(
             nodes.given_char_lcs, 0.0,
-            "No character overlap: {}", nodes.given_char_lcs
+            "No character overlap: {}",
+            nodes.given_char_lcs
         );
     }
 
@@ -970,12 +1172,171 @@ mod tests {
         let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
         assert!(
             (nodes.given_char_lcs - 0.67).abs() < 0.05,
-            "LCS(大文明, 大文) should be ~0.67, got {}", nodes.given_char_lcs
+            "LCS(大文明, 大文) should be ~0.67, got {}",
+            nodes.given_char_lcs
         );
         // Bigram: {大文,文明} ∩ {大文} = {大文} → 1/2 = 0.5
         assert!(
             (nodes.given_bigram_jaccard - 0.5).abs() < 0.05,
-            "Bigram Jaccard should be ~0.5, got {}", nodes.given_bigram_jaccard
+            "Bigram Jaccard should be ~0.5, got {}",
+            nodes.given_bigram_jaccard
+        );
+    }
+
+    #[test]
+    fn test_debug_pang_names() {
+        let matcher = RuleMatcher::default();
+        let a = names::parse_components("PANG Ying Ying, Irene");
+        let b = names::parse_components("PANG Hiu Ying, Irene");
+        let empty = RecordFields::default();
+
+        eprintln!("A: {:?}", a);
+        eprintln!("B: {:?}", b);
+
+        let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
+        eprintln!("nodes: {:?}", nodes);
+        eprintln!("decision: {:?}", matcher.apply_rules(&nodes));
+
+        // Verify: different given names should NOT be exact match
+        assert!(
+            !nodes.given_exact,
+            "Different given names should not be exact match"
+        );
+        // Verify: S↔T should NOT apply to Latin tokens
+        assert!(!nodes.given_st, "Latin tokens should not be S↔T variants");
+    }
+
+    #[test]
+    fn test_given_exact_requires_same_position() {
+        let matcher = RuleMatcher::default();
+        let empty = RecordFields::default();
+
+        // Same tokens, different order — should NOT be exact
+        let a = names::parse_components("John Peter Smith");
+        let b = names::parse_components("Peter John Smith");
+        let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
+        assert!(
+            !nodes.given_exact,
+            "Reordered tokens should not be exact match"
+        );
+
+        // Same tokens, same order — should be exact
+        let a = names::parse_components("John Peter Smith");
+        let b = names::parse_components("John Peter Smith");
+        let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
+        assert!(nodes.given_exact, "Same tokens same order should be exact");
+
+        // Different token count — should NOT be exact
+        let a = names::parse_components("John Peter Smith");
+        let b = names::parse_components("John Smith");
+        let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
+        assert!(
+            !nodes.given_exact,
+            "Different token count should not be exact"
+        );
+    }
+
+    #[test]
+    fn test_st_only_applies_to_cjk() {
+        let matcher = RuleMatcher::default();
+        let empty = RecordFields::default();
+
+        // Latin tokens — S↔T should NOT fire
+        let a = names::parse_components("CHAN Ying Wing");
+        let b = names::parse_components("CHAN Yiu Wing");
+        let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
+        assert!(!nodes.given_st, "Latin tokens should not match via S↔T");
+
+        // CJK tokens — S↔T SHOULD fire
+        let a = names::parse_components("陳大文");
+        let b = names::parse_components("陈大文");
+        let nodes = matcher.evaluate_nodes(&a, &b, &empty, &empty);
+        assert!(nodes.given_st, "CJK tokens should match via S↔T");
+    }
+
+    #[test]
+    fn test_phone_requires_7_or_8_digits() {
+        let matcher = RuleMatcher::default();
+        let a = names::parse_components("陳大文");
+        let b = names::parse_components("陳大明");
+
+        // Exact match — should match
+        let a_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        assert!(nodes.phone_match, "Exact phone should match");
+
+        // First 7 digits match — should match
+        let a_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("91234568".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        assert!(nodes.phone_match, "First 7 digits should match");
+
+        // Only last 4 digits match (e.g., 4567 vs 8567) — should NOT match
+        let a_f = RecordFields {
+            phone: Some("12344567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("98785670".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        assert!(!nodes.phone_match, "Only last 4 digits should NOT match");
+    }
+
+    #[test]
+    fn test_phone_requires_given_signal() {
+        let matcher = RuleMatcher::default();
+
+        // Case 1: Same family, same phone, different given - should NOT match
+        let a = names::parse_components("KWAN Suet Ling");
+        let b = names::parse_components("KWAN Nga Man");
+        let a_f = RecordFields {
+            phone: Some("90435706".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("90435706".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        let decision = matcher.apply_rules(&nodes);
+        assert_eq!(
+            decision.classification,
+            MatchConfidence::NonMatch,
+            "Same family, different given, same phone should NOT match"
+        );
+
+        // Case 2: Same family, same given (partial), same phone - should match via R3d
+        let a = names::parse_components("CHAN Tai Man");
+        let b = names::parse_components("CHAN Tai Wai");
+        let a_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let b_f = RecordFields {
+            phone: Some("91234567".to_string()),
+            ..Default::default()
+        };
+        let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
+        let decision = matcher.apply_rules(&nodes);
+        assert!(
+            decision.classification >= MatchConfidence::High,
+            "Same family, similar given, same phone should match: {:?}",
+            decision
         );
     }
 }

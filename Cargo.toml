@@ -48,6 +48,10 @@ criterion = { version = "0.5", features = ["html_reports"] }
 name = "dataline-demo"
 path = "src/bin/demo.rs"
 
+[[bin]]
+name = "dataline-rules-gen"
+path = "src/bin/rules_gen.rs"
+
 [[bench]]
 name = "matching"
 harness = false
