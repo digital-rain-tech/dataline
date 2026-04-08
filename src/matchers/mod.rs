@@ -238,7 +238,7 @@ impl CjkMultiSignalMatcher {
             }
         }
 
-        // Both Latin: use Jaro-Winkler
+        // Both Latin: Jaro-Winkler
         if a_script == tokenizers::ScriptType::Latin
             && b_script == tokenizers::ScriptType::Latin
         {

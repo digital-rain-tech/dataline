@@ -525,7 +525,7 @@ impl JyutpingDict {
 
 /// Strip tone number from end of Jyutping syllable.
 /// "can4" → "can", "daai6" → "daai", "m4" → "m"
-fn strip_jyutping_tone(jp: &str) -> &str {
+pub fn strip_jyutping_tone(jp: &str) -> &str {
     if jp.ends_with(|c: char| c.is_ascii_digit()) {
         &jp[..jp.len() - 1]
     } else {
@@ -762,63 +762,210 @@ pub fn jyutping_similarity(a: &[char], b: &[char], dict: &JyutpingDict) -> f64 {
 
 // ─── Cross-Script Matching: CJK ↔ Latin romanization ───
 
-/// Common HK romanization equivalences.
-/// Maps toneless Jyutping syllables to their common HK romanizations.
-/// Fallback for unlisted syllables: Jaro-Winkler between Jyutping and input.
+/// HK Government Romanization dictionary — maps CJK characters to their
+/// official HKID romanization(s). Loaded from cantoroman data (11,612 chars).
+pub struct HkRomanDict {
+    /// Maps CJK character → list of HK Government romanization variants.
+    char_to_roman: HashMap<char, Vec<String>>,
+    /// Reverse: romanization → list of CJK characters (for Latin→CJK lookup).
+    roman_to_chars: HashMap<String, Vec<char>>,
+}
+
+impl Default for HkRomanDict {
+    fn default() -> Self {
+        Self::from_embedded()
+    }
+}
+
+impl HkRomanDict {
+    fn from_embedded() -> Self {
+        let data = include_str!("../../data/hk_gov_romanization.txt");
+        let mut char_to_roman = HashMap::with_capacity(12_000);
+        let mut roman_to_chars: HashMap<String, Vec<char>> = HashMap::with_capacity(5_000);
+
+        for line in data.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut parts = line.splitn(2, '\t');
+            let ch = parts.next().and_then(|s| s.chars().next());
+            let romans = parts.next();
+            if let (Some(c), Some(r)) = (ch, romans) {
+                let variants: Vec<String> = r.split(',').map(|s| s.to_lowercase()).collect();
+                for v in &variants {
+                    roman_to_chars.entry(v.clone()).or_default().push(c);
+                }
+                char_to_roman.insert(c, variants);
+            }
+        }
+
+        Self {
+            char_to_roman,
+            roman_to_chars,
+        }
+    }
+
+    /// Get HK Government romanization(s) for a CJK character.
+    pub fn get_romanizations(&self, c: char) -> &[String] {
+        self.char_to_roman
+            .get(&c)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Check if a romanization matches any variant for a character.
+    pub fn matches(&self, c: char, romanization: &str) -> bool {
+        let lower = romanization.to_lowercase();
+        self.char_to_roman
+            .get(&c)
+            .map(|variants| variants.iter().any(|v| v == &lower))
+            .unwrap_or(false)
+    }
+
+    pub fn len(&self) -> usize {
+        self.char_to_roman.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.char_to_roman.is_empty()
+    }
+}
+
+/// Hand-curated Jyutping → HK romanization equivalences (legacy, kept as fallback).
+///
+/// ~120 entries covering top surnames and common given name syllables.
+/// The HkRomanDict (11,612 chars) is checked first; this is the fallback.
 const HK_ROMANIZATION_MAP: &[(&str, &[&str])] = &[
-    // Common surnames
-    ("can", &["chan", "chen"]),
-    ("wong", &["wong", "wang"]),
-    ("lam", &["lam", "lin"]),
-    ("lei", &["lee", "li", "lei"]),
-    ("ng", &["ng", "wu"]),
-    ("coeng", &["cheung", "chang", "zhang"]),
-    ("ho", &["ho"]),
+    // ─── Surname syllables (top ~50 HK surnames) ───
+    ("can", &["chan", "chen", "chun"]),
+    ("loeng", &["leung"]),
+    ("zoeng", &["cheung", "cheong", "chang", "zhang"]),
     ("lau", &["lau", "liu", "liew"]),
-    ("zung", &["chung", "jung"]),
-    ("hung", &["hung"]),
-    ("gwok", &["kwok", "kok"]),
-    ("jan", &["yan"]),
-    ("jip", &["yip", "ip"]),
-    ("jiu", &["yiu", "yew"]),
-    ("jyun", &["yuen", "yuan"]),
-    ("pang", &["pang", "pong"]),
-    ("fung", &["fung"]),
-    ("lo", &["lo", "law"]),
-    ("zau", &["chow", "chau", "zhou"]),
-    ("mak", &["mak", "mok"]),
-    ("siu", &["siu", "shiu"]),
-    ("tong", &["tong", "tang"]),
-    ("sing", &["sing", "shing"]),
+    ("lei", &["lee", "li", "lei"]),
     ("zeng", &["cheng", "zheng"]),
-    ("wui", &["wai", "hui"]),
+    ("lai", &["lai"]),
+    ("joeng", &["yeung", "yang"]),
+    ("dang", &["tang", "deng"]),
+    ("zau", &["chow", "chau", "zhou"]),
+    ("wong", &["wong", "wang"]),
+    ("ng", &["ng", "wu"]),
+    ("ho", &["ho", "he"]),
+    ("lam", &["lam", "lin"]),
+    ("gwok", &["kwok", "kok", "guo"]),
+    ("fung", &["fung", "feng"]),
+    ("zang", &["tsang", "zeng"]),
+    ("taam", &["tam"]),
+    ("pang", &["pang", "pong"]),
+    ("jip", &["yip", "ip", "ye"]),
+    ("siu", &["siu", "shiu", "xiao"]),
+    ("lo", &["lo", "law", "luo"]),
+    ("jyun", &["yuen", "yuan"]),
     ("coi", &["choi", "tsoi", "cai"]),
-    ("gam", &["kam"]),
-    ("jat", &["yat"]),
-    // Common given name syllables
-    ("daai", &["tai"]),
-    ("man", &["man", "mun"]),
-    ("wai", &["wai"]),
-    ("kwong", &["kwong"]),
+    ("hung", &["hung", "hong"]),
+    ("pun", &["poon", "pan"]),
+    ("ze", &["tse", "xie"]),
+    ("maa", &["ma"]),
+    ("gwaan", &["kwan", "guan"]),
+    ("zyu", &["chu", "zhu"]),
+    ("mak", &["mak"]),
+    ("mok", &["mok", "mo"]),
+    ("syun", &["suen", "sun"]),
+    ("wan", &["wan", "wen"]),
+    ("wai", &["wai", "wei"]),
+    ("tong", &["tong", "tang"]),
+    ("au", &["au", "ou"]),
+    ("gou", &["ko", "gao"]),
+    ("jau", &["yau", "you"]),
+    ("faan", &["fan"]),
+    ("leoi", &["lui", "lu"]),
+    ("gam", &["kam", "jin"]),
+    ("lok", &["lok"]),
+    ("ziu", &["chiu", "zhao"]),
+    ("jyu", &["yu"]),
+    ("si", &["sze", "shi"]),
+    ("sit", &["sit", "xue"]),
+    ("dou", &["to", "du"]),
+    ("dung", &["tung", "dong"]),
+    ("sung", &["sung", "song"]),
+    ("tin", &["tin", "tian"]),
+    ("luk", &["luk", "lu"]),
+    ("ceoi", &["tsui", "xu"]),
+    ("heoi", &["hui", "xu"]),
+    ("cing", &["ching", "cheng"]),
+    ("sek", &["shek", "shi"]),
+    ("kwong", &["kwong", "kuang"]),
+    ("haa", &["ha", "xia"]),
+    ("gam", &["kam", "jin"]),
+    ("sou", &["so", "su"]),
+    ("sam", &["shum", "shen"]),
+    ("man", &["man", "mun", "wen"]),
+    ("baak", &["pak", "bai"]),
+    ("wu", &["woo", "hu"]),
+    ("fu", &["fu"]),
+    ("zung", &["chung", "jung", "zhong"]),
+    ("cou", &["tso", "cao"]),
+    ("on", &["on", "an"]),
+    ("gaan", &["kan", "jian"]),
+    ("jan", &["yan", "zhen"]),
+    ("sin", &["sin", "xian"]),
+    ("ngaan", &["ngan", "yan"]),
+    // ─── Common given name syllables ───
+    ("daai", &["tai", "dai"]),
+    ("man", &["man", "mun", "wen"]),
     ("ming", &["ming"]),
-    ("waa", &["wa", "wah"]),
-    ("kok", &["kok"]),
-    ("hing", &["hing"]),
-    ("wing", &["wing"]),
-    ("sai", &["sai"]),
-    ("hoi", &["hoi"]),
-    ("fai", &["fai"]),
-    ("kin", &["kin"]),
-    ("kei", &["kei", "ki"]),
+    ("waa", &["wa", "wah", "hua"]),
+    ("kok", &["kok", "guo"]),
+    ("hing", &["hing", "xing"]),
+    ("wing", &["wing", "yong"]),
+    ("sai", &["sai", "xi"]),
+    ("hoi", &["hoi", "hai"]),
+    ("fai", &["fai", "hui"]),
+    ("kin", &["kin", "jian"]),
+    ("kei", &["kei", "ki", "qi"]),
     ("saan", &["shan", "san"]),
     ("tai", &["tai"]),
+    ("keung", &["keung", "qiang"]),
+    ("sing", &["sing", "shing", "xing"]),
+    ("jat", &["yat", "yi"]),
+    ("ji", &["yi", "yee"]),
+    ("wai", &["wai", "wei"]),
+    ("kwong", &["kwong", "guang"]),
+    ("cing", &["ching"]),
+    ("hung", &["hung"]),
+    ("ping", &["ping"]),
+    ("hon", &["hon", "han"]),
+    ("bou", &["bo", "po"]),
+    ("zan", &["chan", "zhan"]),
+    ("tin", &["tin", "tian"]),
+    ("jing", &["ying"]),
+    ("hing", &["hing"]),
+    ("cung", &["chung"]),
+    ("gong", &["kong", "gang"]),
+    ("mou", &["mo", "wu"]),
+    ("sap", &["sap", "shi"]),
+    ("zik", &["chik", "zhi"]),
+    ("seon", &["shun", "sun"]),
+    ("gwai", &["kwai", "gui"]),
+    ("ling", &["ling"]),
+    ("mei", &["mei", "may"]),
+    ("juk", &["yuk"]),
+    ("fong", &["fong", "fang"]),
+    ("hau", &["hau", "hou"]),
+    ("gai", &["kai"]),
+    ("din", &["din", "dian"]),
+    ("gin", &["gin", "jian"]),
+    ("jyut", &["yuet", "yue"]),
+    ("pui", &["pui", "pei"]),
+    ("kam", &["kam"]),
+    ("lik", &["lik", "li"]),
 ];
 
 /// Compare a Jyutping syllable (toneless) against a Latin romanization token.
 fn jyutping_matches_romanization(jyutping_toneless: &str, romanization: &str) -> f64 {
     let rom_lower: String = romanization.to_lowercase();
 
-    // Exact table match
+    // Check hand-curated Jyutping→romanization table first (fast, const array)
     for &(jp, variants) in HK_ROMANIZATION_MAP {
         if jp == jyutping_toneless {
             for &v in variants {
@@ -826,18 +973,24 @@ fn jyutping_matches_romanization(jyutping_toneless: &str, romanization: &str) ->
                     return 1.0;
                 }
             }
-            // Found the Jyutping entry but no romanization matched — try Jaro-Winkler
-            // against the known variants for a partial score
             let best_variant: f64 = variants
                 .iter()
                 .map(|v| strsim::jaro_winkler(v, &rom_lower))
                 .fold(0.0f64, f64::max);
-            return best_variant;
+            if best_variant > 0.85 {
+                return best_variant;
+            }
         }
     }
 
-    // Not in table — fallback to Jaro-Winkler between raw Jyutping and romanization
+    // Fallback: Jaro-Winkler between raw Jyutping and romanization
     strsim::jaro_winkler(jyutping_toneless, &rom_lower)
+}
+
+/// Compare a CJK character against a Latin romanization using the comprehensive
+/// HK Government Romanization dictionary (11,612 chars).
+pub fn char_matches_hk_roman(c: char, romanization: &str, dict: &HkRomanDict) -> bool {
+    dict.matches(c, romanization)
 }
 
 /// Compare CJK characters against Latin romanization tokens.
@@ -1199,6 +1352,22 @@ mod tests {
         assert!(jyutping_matches_romanization("can", "Chan") > 0.9);
         assert!(jyutping_matches_romanization("wong", "Wong") > 0.9);
         assert!(jyutping_matches_romanization("lam", "Lam") > 0.9);
+    }
+
+    #[test]
+    fn test_hk_roman_dict_loaded() {
+        let dict = HkRomanDict::default();
+        assert!(dict.len() > 11_000, "Expected 11K+ entries, got {}", dict.len());
+    }
+
+    #[test]
+    fn test_hk_roman_dict_lookup() {
+        let dict = HkRomanDict::default();
+        assert!(dict.matches('陳', "Chan"), "陳 should match Chan");
+        assert!(dict.matches('陳', "Chun"), "陳 should match Chun");
+        assert!(dict.matches('黃', "Wong"), "黃 should match Wong");
+        assert!(dict.matches('大', "Tai"), "大 should match Tai");
+        assert!(!dict.matches('陳', "Wong"), "陳 should not match Wong");
     }
 
     #[test]

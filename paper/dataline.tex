@@ -1,0 +1,263 @@
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\documentclass{article}
+\usepackage{arxiv}
+
+% XeLaTeX: native Unicode support for CJK characters
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{Liberation Serif}
+\setmonofont{DejaVu Sans Mono}[Scale=0.85]
+\setCJKmainfont{WenQuanYi Zen Hei}
+\setCJKsansfont{WenQuanYi Zen Hei}
+\setCJKmonofont{WenQuanYi Zen Hei}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{framed}
+\usepackage{booktabs}
+\usepackage{multirow}
+\definecolor{shadecolor}{RGB}{248,248,248}
+\newenvironment{Shaded}{\begin{snugshade}}{\end{snugshade}}
+
+\title{Pool-Based Entity Resolution for Mixed-Script CJK Records:\\Phased Matching with Data Completeness Separation}
+\author{Augustin Chan\\
+\texttt{aug@iterative.day}\\
+Independent Researcher}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Entity resolution for CJK enterprise records faces two independent problems: mixed-script variation (Traditional Chinese, Simplified Chinese, Latin romanization) and data incompleteness (most records lack a unique corroborating identifier). A common production pattern addresses the first problem via transliteration and largely ignores the second—either merging low-confidence pairs that corrupt golden records, or discarding unresolvable records entirely. We present Dataline, an open-source Rust-native ER engine that addresses both. For cross-script matching, we compute three independent signals—phonetic (Jyutping/pinyin coordinate distance), visual (stroke-sequence similarity), and normalization (Simplified↔Traditional)—combined via a deterministic rule engine rather than a continuous threshold. For data incompleteness, we introduce a \emph{pool-based} architecture whose core contribution is twofold: (1) using expected per-name collision count as a formal routing criterion to classify records before matching begins, and (2) treating UNRESOLVED as a protected first-class pipeline state rather than a residual failure bucket. Records with low expected collision count (phone, national ID) form validated clusters; records with only high-collision corroborators (district, name only) are held as UNRESOLVED cohorts—never forced through pairwise matching, never merged at low confidence. On a synthetic benchmark of 1 million persons (2.7 million records), standard pairwise ER applied to sparse records produces 112,299 matches with near-zero true positives; pool separation prevents all of these while maintaining 98.0\% precision on corroborated matches. The system is designed for integrity over recall: UNRESOLVED records are not lost, they await a resolution trigger. It processes 2.7 million records in 66 seconds on commodity hardware, compiles to WebAssembly, and is available under Apache 2.0.
+\end{abstract}
+
+\textbf{Keywords:} entity resolution, CJK matching, cross-script, multi-signal, pool-based, Hong Kong names, Cantonese romanization, open source
+
+%% ============================================================
+\section{Introduction}\label{sec:introduction}
+%% ============================================================
+
+Entity resolution (ER)—identifying records that refer to the same real-world entity—is a foundational problem in data integration \cite{christophides2020overview}. For enterprises operating in Hong Kong, Taiwan, and mainland China, ER is complicated by the CJK script system: the same customer may appear as 陳大文 in a CRM system, \texttt{CHAN Tai Man} on an HKID card, 陈大文 in a mainland partner system, and \texttt{Peter Chan} in an English-only database.
+
+A common production pattern for CJK MDM (Master Data Management) addresses the script problem by transliterating characters to Latin, then applying phonetic algorithms like NYSIIS \cite{taft1970name}. This approach loses information at each stage: pinyin is many-to-one (multiple unrelated characters romanize identically), NYSIIS collapses Chinese consonant distinctions (zh/z/j, ch/c/q), tones are discarded entirely, and visual-similarity errors (OCR misreads, wrong radical) are invisible to phonetic matching. More fundamentally, such pipelines typically treat all records uniformly regardless of which corroborating fields are present—feeding sparse records (name only, or name+district) through the same pairwise engine as rich records, generating false positives at scale.
+
+We present two contributions:
+
+\begin{enumerate}
+\tightlist
+\item A \emph{multi-signal} matching architecture for CJK names that computes phonetic, visual (stroke-based), and normalization (Simplified↔Traditional) signals independently, combining them after scoring via a deterministic rule engine. This catches error types that phonetic-only engines miss entirely, while providing traceable match decisions.
+\item A \emph{pool-based} architecture with two novel elements: using expected per-name collision count as a formal routing criterion before matching begins, and treating UNRESOLVED as a protected first-class pipeline state rather than a residual. Records whose corroborating fields have low expected collision count (phone, national ID) form validated anchor clusters. Records with only high-collision corroborators (name only, name+district) are classified as UNRESOLVED cohorts—never compared pairwise against each other, never merged at low confidence. The three output states (MERGED, UNRESOLVED, SINGLETON) reflect downstream business reality: an UNRESOLVED cohort is not a failure—it is a record awaiting enrichment, not a human reviewing 118 candidate pairs.
+\end{enumerate}
+
+The engine is implemented in Rust for performance (1.7μs per multi-signal comparison), compiles to WebAssembly for browser demos, and stores all results in SQLite for transparent quality analysis.
+
+%% ============================================================
+\section{Related Work}\label{sec:related}
+%% ============================================================
+
+\subsection{Entity Resolution at Scale}
+
+Christophides et al.\ \cite{christophides2020overview} survey end-to-end ER for big data, identifying blocking, matching, and clustering as the three core stages. Papadakis et al.\ \cite{papadakis2020blocking} comprehensively survey blocking and filtering techniques. Recent work on progressive ER \cite{karapiperis2025sper} replaces global sorting with stochastic bipartite maximization for linear-time candidate prioritization. Auto-configuring pipelines \cite{nikoletos2025autoer} use Bayesian optimization to tune blocking and matching parameters without ground truth.
+
+\subsection{CJK Name Matching}
+
+Cross-script name matching has been studied primarily in the context of transliteration. An empirical study of Chinese name matching \cite{aclnamematching2015} achieved F-scores of 96\% using syllable-level comparison. Syllable-based maximum matching \cite{yeh2011syllable} aligns English and Chinese names bidirectionally. The HK name linkage study \cite{strojny2025hknames} found that standardized romanization (Jyutping) improves linkage precision and recall compared to the non-standardized HK Government romanization. However, these approaches focus on transliteration accuracy rather than enterprise-scale ER with multiple data quality levels.
+
+\subsection{Incremental and Cluster-First ER}
+
+Simonini et al.\ \cite{simonini2022ondemand} propose entity resolution on demand with query-driven matching. Fan et al.\ \cite{fan2013incremental} formalize incremental ER on rules and data. Saeedi et al.\ \cite{saeedi2020incremental} explore optimized cluster assignment for multi-source ER. The attractor (or \emph{driver record}) pattern—where one record in a cluster acts as a reference point against which candidates are compared—is a well-established concept in commercial MDM. Our contribution is not the attractor mechanism itself, but the use of expected collision count to determine which records qualify as attractors at all, and the routing of high-collision records to UNRESOLVED cohorts rather than the matching pipeline.
+
+\subsection{Embedding-Based Blocking}
+
+Wang et al.\ \cite{wang2024neurallsh} propose neural locality-sensitive hashing for learned blocking keys. Ma et al.\ \cite{ma2025rag} combine blocking with retrieval-augmented generation for LLM-based matching. Pre-trained embeddings for ER have been extensively evaluated \cite{skoutas2023embeddings}. Embedding-based blocking imposes a finite candidate horizon: only the top-$k$ nearest neighbours are retained for downstream matching. Although larger $k$ values may improve empirical recall, completeness remains non-deterministic and computational cost scales linearly with candidate set size. For high-stakes domains such as financial compliance, this absence of formal recall guarantees is a material limitation.
+
+%% ============================================================
+\section{Multi-Signal CJK Matching}\label{sec:signals}
+%% ============================================================
+
+\subsection{Three Independent Signals}
+
+Rather than collapsing CJK characters to Latin for phonetic comparison, we compute three independent signals per character pair:
+
+\begin{enumerate}
+\tightlist
+\item \textbf{Phonetic similarity}: character → Jyutping (Cantonese) or pinyin (Mandarin) → DimSim-style 2D coordinate distance \cite{dimsim}. Consonants and vowels are placed in a coordinate space where articulatorily similar sounds are close.
+\item \textbf{Visual similarity}: stroke sequence comparison using a 20,901-character dictionary derived from FuzzyChinese. Characters sharing strokes (same radical, similar structure) score high via normalized Levenshtein distance on stroke sequences.
+\item \textbf{Normalization}: Simplified↔Traditional character mapping using OpenCC dictionaries (8,093 entries). Binary signal: either they normalize to the same character or they don't.
+\end{enumerate}
+
+These signals catch different error types (Table~\ref{tab:errors}). A phonetic-only engine misses OCR/stroke errors entirely—the visual signal catches them.
+
+\begin{table}[h]
+\centering
+\caption{Error types and signal responses}\label{tab:errors}
+\begin{tabular}{llll}
+\toprule
+Error type & Phonetic & Visual & Example \\
+\midrule
+Phone dictation & HIGH & LOW & 陳 chén → 程 chéng \\
+OCR / stroke error & LOW & HIGH & 陳 chén → 陣 zhèn \\
+S↔T variant & MATCH & MATCH & 陳 (trad) → 陈 (simp) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cross-Script Matching via HK Government Romanization}
+
+For matching CJK characters against Latin romanizations, we use the Hong Kong Government Romanization standard—the actual system used on HKID cards. We integrate 11,612 character-to-romanization mappings generated from the \texttt{cantoroman} library, providing 22,521 romanization variants. This replaces ad-hoc Jyutping-to-capitalized approaches used in earlier systems.
+
+\subsection{Rule-Based Matching with Node DAG}
+
+Instead of continuous threshold-based scoring, match decisions are made by deterministic rules that combine pre-computed component evaluations (nodes). Twelve node types are evaluated once and shared across ten rules via boolean logic:
+
+\begin{itemize}
+\tightlist
+\item \textbf{Name-sufficient rules} (R1–R3): exact match, S↔T variant, synonym—no corroboration needed
+\item \textbf{Corroboration-required rules} (R4–R10): cross-script romanization, high Jaro-Winkler, partial given name—require phone/address/DOB agreement to upgrade confidence
+\end{itemize}
+
+Each decision is traceable to a named rule: ``R3d: family match + phone match'' rather than ``score 0.73 > threshold 0.7.''
+
+%% ============================================================
+\section{Pool-Based Matching Architecture}\label{sec:pools}
+%% ============================================================
+
+\subsection{Motivation: Incomplete Data Is the Norm}
+
+Enterprise data sources vary dramatically in completeness. CRM systems typically have partial phone coverage; billing systems tend toward higher completeness; legacy systems are often sparse; marketing lists frequently contain nothing but a name. Matching sparse records against each other produces massive false positives (name collision) and bogs down the pipeline.
+
+\subsection{Two-Pool Separation}
+
+Records are classified by the \emph{expected collision count} of their corroborating fields. Formally, for a record with name $n$ and field $f$ taking value $v$, we define:
+\[
+  C(f, v, n) \;=\; \mathbb{E}\!\left[\,\bigl|\{r \in \mathcal{R} \mid r.\mathit{name} = n \;\wedge\; r.f = v\}\bigr|\,\right]
+\]
+where the expectation is over the target record population $\mathcal{R}$. In plain terms: $C(f,v,n)$ measures how many same-name records we expect to share corroborating value $v$ for field $f$. Values near 1 indicate near-unique corroboration; values much larger than 1 indicate the field cannot safely distinguish individuals sharing that name. A field qualifies as a \emph{low-collision corroborator} if $C(f,v,n) \lesssim \theta$ for some threshold $\theta$ close to 1. In practice, $\theta$ is calibrated to the maximum tolerable false merge rate for the deployment domain: financial compliance environments may set $\theta = 1$ (at most one expected collision per name group), while lower-stakes applications may permit $\theta = 2$ or $3$. We use collision count rather than Shannon entropy because it maps directly to false positive rate: if $C \approx 1$, a name+field match approaches uniqueness; if $C \gg 1$, the field cannot distinguish persons sharing that name and pairwise matching will be dominated by false positives.
+
+\begin{itemize}
+\tightlist
+\item \textbf{Pool A (rich)}: records with at least one corroborating field whose expected collision count is close to one when combined with name. In practice: phone, email, national ID, or date of birth.\footnote{For an 8-digit HK mobile number: $\sim$0.001 expected collisions per name group. For date of birth (29,200 possible values over an 80-year span): $\sim$0.004. Both satisfy the threshold. District (19 HK districts, $\sim$6 persons per name+district group): $\sim$6 expected collisions—insufficient as a sole corroborator, though useful for Phase~1 blocking.}
+\item \textbf{Pool B (sparse)}: records whose only corroborating evidence has expected collision count $\gg 1$ (district alone, $\sim$6) or no corroboration at all (name only, $\sim$118 per name in the benchmark).
+\end{itemize}
+
+Pool A records form anchor clusters through multi-field exact matching; only phone-corroborated clusters are validated pairwise in Phase~2a (the benchmark dataset contains phone and district only—DOB and email are absent, so phone is the sole low-collision corroborator available). Pool B records are grouped by name into cohorts—never compared against each other—and classified as UNRESOLVED. They are not silently merged; instead they await a resolution trigger that promotes them to Pool~A (e.g., a phone number collected during a subsequent business interaction).
+
+\subsection{Phased Processing Pipeline}
+
+\begin{enumerate}
+\tightlist
+\item \textbf{Phase 1: Multi-field exact grouping} (zero pairwise comparisons). The pass schedule is a deterministic enumeration of every meaningful combination of name variant (exact, S$\leftrightarrow$T normalised, honorific-stripped, romanised) and corroborating field (phone, district), ordered by the number of corroborating signals present. This yields ten hash passes at strictly decreasing confidence—name+phone+district, name+phone, name+district, S$\leftrightarrow$T+phone, romanised+phone, etc.—with no learned ordering or heuristic selection. Records consumed by an earlier pass skip all later passes.
+\item \textbf{Phase 2a: Phone-corroborated cluster validation}. The rule engine validates pairs within Phase~1 clusters that were formed with phone corroboration (passes: exact+phone, S$\leftrightarrow$T+phone, stripped+phone, roman+phone). District-only and name-only clusters are not validated pairwise—they become Pool~B cohorts. Within phone-corroborated clusters the rule engine assigns a confidence level; only matches at \texttt{High} or above are emitted.
+\item \textbf{Phase 2b: Attractor assignment}. Each remaining unmatched record is compared individually against Phase~1 cluster attractors. Richer clusters are evaluated first; a phone pre-filter skips pairs with conflicting phone numbers. A future optimisation would group unmatched records by name before this step, so only one representative per name-group compares against attractors and all group members inherit the result.
+\item \textbf{Stage 2: Pairwise remainder}. Records not consumed by Phase~1 or Phase~2b are passed to traditional block-based pairwise matching. After Phase~1+2 consumption this pool is small.
+\end{enumerate}
+
+%% ============================================================
+\section{Hong Kong Name Formats}\label{sec:hknames}
+%% ============================================================
+
+Hong Kong names present unique parsing challenges. The same person appears as:
+
+\begin{itemize}
+\tightlist
+\item 陳大文先生 (formal Chinese with honorific)
+\item \texttt{CHAN Tai Man} (HKID romanization, surname first in ALL CAPS)
+\item \texttt{CHAN Tai Man, Peter} (HKID with English alias after comma)
+\item \texttt{Peter Chan} (English order, surname last)
+\item 陈大文 (Simplified Chinese, mainland system)
+\item 阿文 (informal Cantonese with prefix)
+\end{itemize}
+
+We implement a component-level name parser that handles: compound surnames (歐陽, Au-Yeung), CJK honorific/prefix stripping (先生, 阿/小/老), HKID format detection (ALL CAPS surname first), comma-separated English names, and hyphenated given names. An 80-entry HK surname dictionary enables surname-first vs surname-last disambiguation. Correct component extraction is a prerequisite for blocking key quality: a parser that conflates 陳 (surname) with 大文 (given name) will fail to produce matching keys across systems, causing missed links that no downstream matching signal can recover.
+
+%% ============================================================
+\section{Experimental Evaluation}\label{sec:experiments}
+%% ============================================================
+
+\subsection{Synthetic Benchmark}
+
+We generate a dataset of 1 million persons (2,691,721 records) across four source systems: CRM (Chinese + honorific, 80\% phone), Billing (HKID romanization, 100\% phone), Legacy (Simplified Chinese, 40\% phone, 50\% inclusion rate), English (English name only, 70\% phone, 19\% inclusion rate). Given names are drawn as atomic bigram pairs from gender-stratified pools (87 male classic, 70 female classic, 68 Gen~Y/Z across genders) with HK Government Romanization for cross-script consistency. Surnames follow a Zipf distribution over 50 HK surnames plus compound surnames (歐陽, 司徒).
+
+\subsection{Results}
+
+\begin{table}[h]
+\centering
+\caption{Pipeline performance at 1M scale (2,691,721 records, bigram name generator)}\label{tab:results}
+\begin{tabular}{lrrrrr}
+\toprule
+Phase & Comparisons & Matches & TPs & Precision & Recall \\
+\midrule
+Phase 1 (hash) & 0 & — & — & — & — \\
+Phase 2a (phone-corroborated) & 21,176 & 20,878 & 20,877 & 100.0\% & 0.8\% \\
+Phase 2b (attractor) & 1,945,780 & 14,347 & 13,636 & 95.0\% & 0.6\% \\
+Stage 2 (pairwise remainder) & 389,748 & 112,299 & 1 & 0.0\% & — \\
+\midrule
+\textbf{Total (2a+2b)} & — & \textbf{35,225} & \textbf{34,513} & \textbf{98.0\%} & \textbf{1.4\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Phase 2a validates pairs only within phone-corroborated clusters, achieving 100\% precision. Phase 2b (attractor assignment) achieves 95.0\% precision on records matched transitively against cluster attractors. Stage 2 processes the 1.9\% of records not consumed by Phase~1; it generates many rule-based matches but near-zero true positives because those records share only surface name similarity without corroborating fields. The combined Phase~2a+2b precision of 98.0\% represents the auto-merge tier. Records in district-only or name-only clusters are held as UNRESOLVED cohorts pending field enrichment.
+
+\subsection{Confidence Strategies}
+
+The pipeline exposes a configurable auto-merge threshold. The \texttt{strict} strategy restricts to phone-corroborated pairs in both Phase~2a and Phase~2b, achieving $\approx$100\% precision with 28,009 matches—safe for auto-merge without data steward review. The broader \texttt{auto-merge} tier adds S$\leftrightarrow$T and exact-name matches within phone-corroborated clusters, reaching 98.0\% precision at 35,225 matches. In both cases the bound comes from the phone-corroboration requirement, not from the matching rules themselves.
+
+\subsection{Performance}
+
+Processing 2,691,721 records on a 20-core commodity machine:
+
+\begin{itemize}
+\tightlist
+\item Phase 1 (hash grouping): 17 seconds, 98.1\% records consumed
+\item Phase 2a (phone-corroborated validation): $<$1 second (21,176 comparisons)
+\item Phase 2b (attractor assignment): 12 seconds (parallel, 20 threads)
+\item Stage 2 (pairwise remainder): 5 seconds (389,748 pairs)
+\item Total: 66 seconds (1.1 minutes)
+\end{itemize}
+
+Raw matching speed: 1.7μs per multi-signal CJK comparison (588K comparisons/sec single core). Phase~1 hash grouping consumes 98.1\% of records, leaving only 52,275 for Phase~2b attractor assignment and 37,928 for Stage~2 pairwise—dramatically reducing comparison work relative to a flat pairwise approach.
+
+%% ============================================================
+\section{Discussion}\label{sec:discussion}
+%% ============================================================
+
+\subsection{Interpreting Synthetic Benchmark Results}
+
+The benchmark produces approximately 8,500 unique full-name combinations for 1 million persons—roughly 118 persons sharing each name, consistent with observed collision rates for common HK names. The most informative row in Table~\ref{tab:results} is Stage~2: 389,748 comparisons, 112,299 matches, 1 true positive—0\% precision. Stage~2 runs on records that Phase~1 could not group with a phone-corroborated cluster. It represents what a traditional pairwise ER pipeline would produce if applied to the sparse-record population: a flood of low-confidence matches that would corrupt every golden record they touched. Pool separation prevents all of these; the sparse records become UNRESOLVED cohorts instead.
+
+This paper is not proposing a maximum-recall ER system. It is proposing an \emph{integrity-first} architecture: the system never merges what it cannot corroborate, and it makes the boundary between corroborated and uncorroborated records explicit rather than hiding it behind a threshold. Low auto-merge recall is not a deficiency—it is the expected outcome when the system is working correctly on a population with limited phone coverage. In a domain such as financial compliance, a false merge (two different customers sharing one golden record) is categorically worse than a missed merge (one customer with two records). The benchmark's 1.4\% auto-merge recall reflects the phone coverage of the synthetic dataset; in enterprise deployments with higher phone coverage, pool A membership and auto-merge recall scale proportionally. Records in UNRESOLVED cohorts are not lost—they await a resolution trigger (phone number collected, KYC event, or transitive linkage through a golden record). Validation on real enterprise data remains future work.
+
+\subsection{Why Pool Separation Matters}
+
+Without pool separation, sparse records (marketing lists, legacy systems with name only) would produce $O(n^2)$ comparisons within their name group, all at near-zero precision—or worse, generate low-confidence merges that corrupt golden records. Pool separation prevents both outcomes: sparse records are grouped into cohorts (avoiding $O(n^2)$) and classified as UNRESOLVED rather than merged, preserving data integrity until corroborating evidence arrives.
+
+\subsection{Comparison with Commercial Engines}
+
+Commercial MDM engines use a transliterate → NYSIIS → compare pipeline that loses information at each stage. Our multi-signal approach preserves the original characters, computing phonetic and visual signals independently. The rule-based decision engine (vs.\ continuous threshold scoring) provides auditable match decisions: customers see ``R3d: family match + phone match'' rather than an opaque score.
+
+The pool-based architecture addresses a gap in common approaches: many commercial MDM platforms converged toward a single-golden-record model where multiple views require explicit configuration. Our computed-view model—where the golden record is derived on-demand from linked records via survivorship rules—makes multiple views a natural consequence of the architecture rather than a separate concern.
+
+%% ============================================================
+\section{Conclusion}\label{sec:conclusion}
+%% ============================================================
+
+The primary contribution is architectural: treating UNRESOLVED as a first-class record state rather than a residual bucket. Standard pairwise ER applied to sparse CJK records produces a false-positive flood (Stage~2: 112,299 matches, 1 TP); pool-based separation prevents this entirely by routing sparse records to name cohorts rather than the matching pipeline. The multi-signal CJK matching engine provides cross-script coverage (phonetic, visual, S↔T normalization) for the auto-merge tier, with traceable rule-based decisions. The open-source implementation processes 2.7 million records in 66 seconds, compiles to WebAssembly, and is available under Apache 2.0.
+
+Future work: ordered cross-script syllable alignment (comparing Jyutping/pinyin sequences directly against romanized tokens to improve recall for records without phone corroboration), and validation on real enterprise data where phone coverage and name pool sizes differ from the synthetic benchmark.
+
+\medskip
+\noindent\textbf{Broader vision — Chronicle MDM.} Dataline is the matching engine layer of a larger process model. In production, records are not a static dataset but \emph{living documents}: they accumulate fields over time, carry resolution state (MERGED, UNRESOLVED, SINGLETON), and are progressively resolved by business events rather than batch runs. Under this model, UNRESOLVED records sit passively in name cohorts—not actively managed, not merged—waiting for a triggering event (a phone number collected during KYC, a biometric confirmation, a transaction linking to a known golden record) that provides sufficient corroboration to route them. A golden record built from high-confidence matches becomes a \emph{transitive attractor}: its accumulated fields extend the matching reach to sparse records that were unresolvable in isolation. Each pipeline run produces richer attractors, improving resolution in subsequent runs. This incremental, event-driven architecture—where the engine presented here provides the corroboration layer—is the basis of Chronicle MDM, a planned open-source platform for living customer identity management.
+
+\medskip
+\noindent\textbf{Availability:} Source code, benchmarks, and live demo at \url{https://github.com/digital-rain-tech/dataline}
+
+%% ============================================================
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

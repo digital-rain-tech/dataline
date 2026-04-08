@@ -1,106 +1,140 @@
 # Dataline
 
-CJK-native master data matching engine, built in Rust.
+CJK-native entity resolution engine, built in Rust.
 
-Dataline resolves mixed-script customer records — `陳大文` / `Chan Tai Man` / `CHAN, Tai-Man` / `陈大文` — that existing open-source entity resolution frameworks handle poorly. No open-source MDM tool matches CJK characters well; Dataline fills that gap.
+Dataline resolves mixed-script customer records — `陳大文` / `Chan Tai Man` / `CHAN, Tai-Man` / `陈大文` — using phonetic, visual, and normalization signals rather than transliterate-to-Latin approaches. It introduces a **pool-based architecture** that separates records by data completeness before matching, preventing sparse records from generating false merges.
 
-## Why not just transliterate to Latin and match phonetically?
+**Paper:** [Pool-Based Entity Resolution for Mixed-Script CJK Records](paper/dataline.pdf)
 
-That's what commercial MDM engines do: convert CJK to pinyin, run NYSIIS, compare. This pipeline loses information at every stage:
-
-- **Pinyin is many-to-one.** "morning", "dust", and the surname Chan all romanize to "chen".
-- **NYSIIS collapses Chinese consonant distinctions.** zh/z/j, ch/c/q, sh/s/x are phonemically distinct in Chinese but collapse in NYSIIS.
-- **Tones are discarded.** Mandarin has 4 tones, Cantonese has 6–9. Discarding them throws away a primary feature of the language.
-- **Visual errors are invisible.** An OCR misread produces a character that *looks* nearly identical but *sounds* completely different. Phonetic-only matching scores it as a non-match.
-
-## Multi-signal matching
-
-Instead of collapsing everything into one phonetic dimension, Dataline computes three independent signals per character pair:
-
-| Signal | What it measures | Catches |
-|--------|-----------------|---------|
-| **Phonetic** | How similar do they *sound*? (pinyin/jyutping distance) | Phone dictation, dialect variants, romanization differences |
-| **Visual** | How similar do they *look*? (stroke sequence similarity) | OCR errors, handwriting errors, wrong radical/stroke |
-| **Normalization** | Are they the same character in different forms? | Simplified ↔ Traditional mixing |
-
-Signals are combined *after* scoring via a configurable strategy (max, weighted average, or independent thresholds per signal). This prevents high-confidence visual matches from being diluted by low phonetic scores, or vice versa.
-
-```
-陳 vs 陣: phonetic 0.97 (chén/zhèn — close in DimSim space), visual 0.81 → MATCH
-陳 vs 李: phonetic 0.22, visual 0.34 → NO MATCH
-陳 vs 陈: S↔T normalization match → MATCH (no scoring needed)
-```
-
-## Pipeline
-
-```
-tokenize → block → compare → cluster → survive
-```
-
-1. **Tokenize** — CJK character n-grams, mixed-script detection, jieba segmentation
-2. **Block** — Reduce O(n²) comparisons using blocking keys (first character, phonetic key, address district)
-3. **Compare** — Pairwise matching with pluggable matchers (exact, Jaro-Winkler, CJK n-gram, multi-signal CJK)
-4. **Cluster** — Group matched records into entities *(not yet implemented)*
-5. **Survive** — Build golden records with declarative per-field survivorship rules (most trusted source, most complete, most recent)
-
-Additional modules:
-- **HK address matching** — Hierarchical component comparison (district → estate → building → block → floor → flat) with OGCIO reference data enrichment
-
-## Getting started
+## Quick start
 
 ```bash
-cargo build
+git clone https://github.com/digital-rain-tech/dataline
+cd dataline
+cargo run --release --bin dataline-demo -- pipeline data/sample_1m.csv data/job_1m
+```
+
+Processes **2.7 million records in ~66 seconds** on a 20-core machine. Output:
+
+```
+data/job_1m/results.db     — full results in SQLite (query with sqlite3)
+data/job_1m/matches.csv    — enriched match pairs (open in Excel / pandas)
+```
+
+The `matches.csv` columns: `left_id, left_source, left_name, right_id, right_source, right_name, phase, confidence, rule, correct`
+
+The `correct` column is the ground-truth indicator — `true` when two records belong to the same person, `false` when they don't. On the 1M benchmark: **98.0% precision** on the auto-merge tier, **0% precision** on sparse-record pairwise (which pool separation prevents entirely).
+
+## Why pool-based?
+
+Standard ER applied to CJK enterprise data produces a false-positive flood on sparse records. The benchmark shows this directly:
+
+| Phase | Comparisons | Matches | True Positives | Precision |
+|---|---|---|---|---|
+| Phase 1 (hash grouping) | 0 | — | — | — |
+| Phase 2a (phone-corroborated) | 21,176 | 20,878 | 20,877 | **100.0%** |
+| Phase 2b (attractor assignment) | 1,945,780 | 14,347 | 13,636 | **95.0%** |
+| Stage 2 (sparse pairwise) | 389,748 | 112,299 | 1 | **0.0%** |
+| **Total auto-merge (2a+2b)** | | **35,225** | **34,513** | **98.0%** |
+
+Stage 2 is what happens without pool separation: 112,299 matches, 1 true positive. Pool separation routes those records to UNRESOLVED cohorts instead.
+
+## Why not just transliterate to Latin?
+
+That's the common production pattern: convert CJK to pinyin, run NYSIIS, compare. It loses information at every stage:
+
+- **Pinyin is many-to-one** — multiple unrelated characters romanize identically
+- **NYSIIS collapses Chinese consonant distinctions** — zh/z/j, ch/c/q, sh/s/x are phonemically distinct in Chinese but collapse
+- **Tones are discarded** — Cantonese has 6–9 tones; Mandarin has 4; all signal
+- **Visual errors are invisible** — OCR misreads produce characters that look identical but sound different; phonetic-only matching scores them as non-matches
+
+## Architecture
+
+### Three matching signals
+
+| Signal | Measures | Catches |
+|---|---|---|
+| **Phonetic** | Jyutping/pinyin coordinate distance | Phone dictation, dialect variants, romanization differences |
+| **Visual** | Stroke sequence similarity (20,901-char dictionary) | OCR errors, wrong radical, handwriting variants |
+| **Normalization** | Simplified ↔ Traditional mapping | Cross-system script variants |
+
+Signals are combined via a deterministic rule engine (not a continuous threshold), producing traceable decisions: `R3d: family match + phone match` rather than `score 0.73 > threshold 0.7`.
+
+### Pool-based pipeline
+
+Records are classified by **expected collision count** before matching:
+
+- **Pool A (rich)**: records with a low-collision corroborator (phone, national ID, DOB) — expected < ~1 person per name+field combination → form validated anchor clusters
+- **Pool B (sparse)**: name-only or name+district records — expected ~6–118 persons per combination → classified as UNRESOLVED cohorts, never merged at low confidence
+
+Pipeline phases:
+1. **Phase 1** — Zero-comparison hash grouping across 10 name variant × corroborator combinations
+2. **Phase 2a** — Rule-engine validation within phone-corroborated clusters (100% precision)
+3. **Phase 2b** — Attractor assignment: remaining records compared against cluster drivers
+4. **Stage 2** — Traditional pairwise on the small residual population
+
+Output states: **MERGED** (auto-merge safe), **UNRESOLVED** (cohort awaiting enrichment), **SINGLETON**.
+
+### Hong Kong name handling
+
+The same person appears as `陳大文先生`, `CHAN Tai Man`, `CHAN Tai Man, Peter`, `Peter Chan`, `陈大文`, and `阿文` across enterprise systems. The parser handles compound surnames (歐陽, Au-Yeung), honorific stripping (先生, 阿/小/老), HKID format (ALL CAPS surname-first), and comma-separated English aliases using an 80-entry HK surname dictionary.
+
+## Commands
+
+```bash
+# Run full pipeline on included 1M benchmark dataset
+cargo run --release --bin dataline-demo -- pipeline data/sample_1m.csv data/job_1m
+
+# Generate your own synthetic dataset
+cargo run --release --bin dataline-demo -- generate 50000 data/my_data.csv
+cargo run --release --bin dataline-demo -- pipeline data/my_data.csv data/my_job
+
+# Run tests
 cargo test
-cargo bench    # criterion benchmarks for matchers and tokenizers
+
+# Run benchmarks
+cargo bench
 ```
 
-## Architecture decisions
+## Sample dataset
 
-See `docs/adr/` for detailed rationale:
+`data/sample_1m.csv` (stored via Git LFS) — 1,000,000 synthetic HK persons, 2,691,721 records across four source systems:
 
-- [ADR-001](docs/adr/001-competitive-landscape-and-building-blocks.md) — Why Rust, competitive landscape, building blocks survey
-- [ADR-002](docs/adr/002-parallelism-not-distribution.md) — Rayon parallelism over distributed architecture (scales to 10M+ records on commodity hardware)
-- [ADR-003](docs/adr/003-multi-signal-cjk-matching.md) — Multi-signal CJK matching design and why phonetic-only fails
+| Source | Script | Phone coverage | Notes |
+|---|---|---|---|
+| CRM | Traditional Chinese + honorific | 80% | Primary system |
+| Billing | HKID romanization | 100% | High completeness |
+| Legacy | Simplified Chinese | 40% | 50% inclusion rate |
+| English | English name only | 70% | 19% inclusion rate |
 
-## Data
-
-All signal dictionaries are embedded at compile time from `data/`:
-
-| File | Source | Size | Contents |
-|------|--------|------|----------|
-| `dict_chinese_stroke.txt` | [FuzzyChinese](https://github.com/Luminoso-AI/FuzzyChinese) | 892KB | Stroke decompositions for 20,901 CJK characters |
-| `dict_cantonese_jyutping.txt` | [cpp-pinyin](https://github.com/AnyListen/cpp-pinyin) | 488KB | Cantonese Jyutping readings for 19,482 characters |
-| `STCharacters.txt` | [OpenCC](https://github.com/BYVoid/OpenCC) | 35KB | Simplified → Traditional mappings (3,980 entries) |
-| `TSCharacters.txt` | [OpenCC](https://github.com/BYVoid/OpenCC) | 35KB | Traditional → Simplified mappings (4,113 entries) |
-
-Phonetic similarity uses [rust-pinyin](https://crates.io/crates/pinyin) for Mandarin pinyin conversion and a Cantonese Jyutping dictionary for dual-dialect matching, both with [DimSim](https://github.com/Wikipedia2008/DimSim)-style 2D coordinate distance for consonant/vowel similarity scoring.
-
-## Cross-script matching
-
-Dataline matches CJK characters against Latin romanizations:
-
-```
-陳大文 vs "Chan Tai Man" → cross-script phonetic match (869ns)
-```
-
-Uses a Jyutping-to-HK-romanization equivalence table (~45 common syllable mappings) with Jaro-Winkler fallback. Handles mixed-script inputs (`Chan 陳`).
+Names drawn from gender-stratified bigram pools (87 male classic, 70 female classic, 68 Gen Y/Z) with HK Government Romanization for cross-script consistency.
 
 ## Browser demo
-
-The matching engine compiles to WebAssembly via `wasm-pack`:
 
 ```bash
 wasm-pack build --target web --no-default-features --features wasm
 ```
 
-This produces a ~1.6MB `.wasm` binary (dictionaries included) that runs entirely in the browser — no server needed. Try the [live demo](https://dataline.dev).
+Produces a ~1.6MB `.wasm` binary (all dictionaries embedded) that runs entirely in the browser. Live demo: [dataline.dev](https://dataline.dev)
 
-## Current status
+## Data sources
 
-Early development. All matching signals implemented and working including cross-script. Remaining work:
+| File | Source | Contents |
+|---|---|---|
+| `dict_chinese_stroke.txt` | [FuzzyChinese](https://github.com/Luminoso-AI/FuzzyChinese) | Stroke decompositions, 20,901 chars |
+| `dict_cantonese_jyutping.txt` | [cpp-pinyin](https://github.com/AnyListen/cpp-pinyin) | Cantonese Jyutping, 19,482 chars |
+| `hk_gov_romanization.json` | [cantoroman](https://github.com/cantoroman) | HK Government Romanization, 11,612 chars |
+| `STCharacters.txt` / `TSCharacters.txt` | [OpenCC](https://github.com/BYVoid/OpenCC) | S↔T mappings, 8,093 entries |
 
-- Clustering stage (grouping matched pairs into entities)
-- PyO3 Python bindings
+## Architecture decisions
+
+Design rationale in `docs/adr/`:
+
+- [ADR-003](docs/adr/003-multi-signal-cjk-matching.md) — Multi-signal design and why phonetic-only fails
+- [ADR-010](docs/adr/010-rule-based-matching-architecture.md) — Rule engine vs threshold scoring
+- [ADR-018](docs/adr/018-phased-cluster-first-matching.md) — Phased cluster-first pipeline
+- [ADR-022](docs/adr/022-pool-based-matching-rich-vs-sparse.md) — Pool-based separation design
+- [ADR-024](docs/adr/024-driver-record-selection-and-cluster-merge.md) — Driver record selection and cluster merge
 
 ## License
 

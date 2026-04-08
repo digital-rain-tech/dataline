@@ -74,6 +74,63 @@ pub fn has_cjk(s: &str) -> bool {
     tokenizers::contains_cjk(s)
 }
 
+/// Parse a free-form name into typed components.
+///
+/// Returns JSON with the parsed structure:
+/// ```json
+/// {
+///   "raw": "Dr. Robert J. Smith Jr.",
+///   "language": "Latin",
+///   "title": "Dr",
+///   "family": "Smith",
+///   "given": ["Robert", "J"],
+///   "suffix": "Jr",
+///   "prefix": null,
+///   "honorific": null
+/// }
+/// ```
+#[wasm_bindgen]
+pub fn parse_name(input: &str) -> String {
+    let components = crate::names::parse_components(input);
+    serde_json::to_string(&components).unwrap_or_else(|e| {
+        serde_json::json!({"error": e.to_string()}).to_string()
+    })
+}
+
+/// Compare two names at the component level with transparent scoring.
+///
+/// Each component is scored independently. Title/suffix agreement
+/// boosts the score but never penalizes.
+///
+/// Returns JSON with per-component breakdown:
+/// ```json
+/// {
+///   "core_score": 0.95,
+///   "title_boost": 0.05,
+///   "suffix_boost": 0.03,
+///   "synonym_applied": true,
+///   "combined": 1.0,
+///   "components": [
+///     {"component": "family", "left_value": "Smith", "right_value": "Smith", "score": 1.0, "method": "jaro_winkler"},
+///     {"component": "given[0]", "left_value": "Bob", "right_value": "Robert", "score": 1.0, "method": "synonym"}
+///   ],
+///   "explanation": "core: 1.00, title boost: +0.05, synonym applied"
+/// }
+/// ```
+#[wasm_bindgen]
+pub fn compare_names(a: &str, b: &str, use_synonyms: bool, normalization_penalty: f64) -> String {
+    let ac = crate::names::parse_components(a);
+    let bc = crate::names::parse_components(b);
+    let result = crate::names::compare_components(&ac, &bc, use_synonyms, normalization_penalty);
+
+    serde_json::json!({
+        "left": ac,
+        "right": bc,
+        "result": result,
+    })
+    .to_string()
+}
+
 /// Compare two HK addresses given as JSON objects.
 ///
 /// Each address should be a JSON object with optional fields:

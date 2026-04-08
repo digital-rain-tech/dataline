@@ -27,6 +27,12 @@ pinyin = "0.11"
 # WASM bindings
 wasm-bindgen = { version = "0.2", optional = true }
 
+# Serialization (binary, for work queue files)
+bincode = "1"
+
+# SQLite for match results and quality analysis
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 # Error handling
 thiserror = "2"
 
@@ -37,6 +43,10 @@ wasm = ["dep:wasm-bindgen"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bin]]
+name = "dataline-demo"
+path = "src/bin/demo.rs"
 
 [[bench]]
 name = "matching"

@@ -8,7 +8,11 @@
 
 pub mod address;
 pub mod blocking;
+pub mod clustering;
 pub mod matchers;
+pub mod names;
+pub mod pipeline;
+pub mod rules;
 pub mod survivorship;
 pub mod tokenizers;
 pub mod types;
