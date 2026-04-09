@@ -19,6 +19,7 @@
 //!  given name is an S↔T variant" — not "score was 0.73 > threshold 0.7".
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::matchers::signals::{self, JyutpingDict, NormDict};
 use crate::names::{self, NameComponents};
@@ -91,6 +92,10 @@ pub struct NodeResults {
 pub struct RuleMatcher {
     jyutping_dict: JyutpingDict,
     norm_dict: NormDict,
+    /// Compiled JSON rules (if loaded)
+    compiled_rules: Option<Vec<CompiledRule>>,
+    /// Requirements for distilled minimal nodes
+    node_requirements: Option<NodeRequirements>,
 }
 
 impl Default for RuleMatcher {
@@ -98,7 +103,29 @@ impl Default for RuleMatcher {
         Self {
             jyutping_dict: JyutpingDict::default(),
             norm_dict: NormDict::default(),
+            compiled_rules: None,
+            node_requirements: None,
         }
+    }
+}
+
+impl RuleMatcher {
+    /// Load rules from JSON config file
+    pub fn load_rules(&mut self, path: &str) -> Result<(), String> {
+        let (compiled_rules, node_requirements) = load_rules_from_json(path)?;
+        self.compiled_rules = Some(compiled_rules);
+        self.node_requirements = Some(node_requirements);
+        Ok(())
+    }
+
+    /// Check if JSON rules are loaded
+    pub fn has_json_rules(&self) -> bool {
+        self.compiled_rules.is_some()
+    }
+
+    /// Get node requirements (minimal nodes to compute)
+    pub fn get_node_requirements(&self) -> Option<&NodeRequirements> {
+        self.node_requirements.as_ref()
     }
 }
 
@@ -109,6 +136,259 @@ pub struct RecordFields {
     pub email: Option<String>,
     pub dob: Option<String>,
     pub district: Option<String>,
+}
+
+// ─── JSON Configurable Rules ───
+
+/// Node field identifiers for rule requirements
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NodeField {
+    FamilyExact,
+    FamilySt,
+    FamilyRomanization,
+    FamilyMatch, // family_exact OR family_st OR family_romanization
+    GivenExact,
+    GivenSt,
+    GivenRomanization,
+    GivenPartial,
+    GivenJw,
+    GivenBigramJaccard,
+    GivenSignal, // given_exact OR given_partial OR given_romanization OR given_st OR given_jw > 0.85
+    PhoneMatch,
+    EmailMatch,
+    DobMatch,
+    DistrictMatch,
+}
+
+impl NodeField {
+    /// Parse from string (used when loading JSON)
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "family_exact" => Some(NodeField::FamilyExact),
+            "family_st" => Some(NodeField::FamilySt),
+            "family_romanization" => Some(NodeField::FamilyRomanization),
+            "family_match" => Some(NodeField::FamilyMatch),
+            "given_exact" => Some(NodeField::GivenExact),
+            "given_st" => Some(NodeField::GivenSt),
+            "given_romanization" => Some(NodeField::GivenRomanization),
+            "given_partial" => Some(NodeField::GivenPartial),
+            "given_jw" => Some(NodeField::GivenJw),
+            "given_bigram_jaccard" => Some(NodeField::GivenBigramJaccard),
+            "given_signal" => Some(NodeField::GivenSignal),
+            "phone_match" => Some(NodeField::PhoneMatch),
+            "email_match" => Some(NodeField::EmailMatch),
+            "dob_match" => Some(NodeField::DobMatch),
+            "district_match" => Some(NodeField::DistrictMatch),
+            _ => None,
+        }
+    }
+
+    /// Get the value from NodeResults
+    pub fn get(&self, nodes: &NodeResults) -> bool {
+        match self {
+            NodeField::FamilyExact => nodes.family_exact,
+            NodeField::FamilySt => nodes.family_st,
+            NodeField::FamilyRomanization => nodes.family_romanization,
+            NodeField::FamilyMatch => {
+                nodes.family_exact || nodes.family_st || nodes.family_romanization
+            }
+            NodeField::GivenExact => nodes.given_exact,
+            NodeField::GivenSt => nodes.given_st,
+            NodeField::GivenRomanization => nodes.given_romanization,
+            NodeField::GivenPartial => nodes.given_partial,
+            NodeField::GivenJw => nodes.given_jw > 0.0, // Will handle thresholds separately
+            NodeField::GivenBigramJaccard => nodes.given_bigram_jaccard > 0.0,
+            NodeField::GivenSignal => {
+                nodes.given_exact
+                    || nodes.given_partial
+                    || nodes.given_romanization
+                    || nodes.given_st
+                    || nodes.given_jw > 0.85
+            }
+            NodeField::PhoneMatch => nodes.phone_match,
+            NodeField::EmailMatch => nodes.email_match,
+            NodeField::DobMatch => nodes.dob_match,
+            NodeField::DistrictMatch => nodes.district_match,
+        }
+    }
+
+    /// Is this a threshold field that requires comparison?
+    pub fn is_threshold(&self) -> bool {
+        matches!(self, NodeField::GivenJw | NodeField::GivenBigramJaccard)
+    }
+}
+
+/// A rule loaded from JSON config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JsonRule {
+    /// The boolean condition (e.g., "family_exact && given_exact")
+    pub condition: String,
+    /// Required confidence level
+    pub confidence: String,
+}
+
+/// Rules config loaded from JSON
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RulesConfig {
+    pub version: String,
+    pub rules: Vec<JsonRule>,
+}
+
+/// Compiled rule for fast evaluation
+#[derive(Debug, Clone)]
+pub struct CompiledRule {
+    /// Boolean node checks: (field, required_value)
+    pub bool_checks: Vec<(NodeField, bool)>,
+    /// Threshold checks: (field, operator, value)
+    pub threshold_checks: Vec<(NodeField, &'static str, f64)>,
+    pub confidence: MatchConfidence,
+    pub original_condition: String,
+}
+
+/// Requirements distilled from all rules - minimal nodes to compute
+#[derive(Debug, Clone)]
+pub struct NodeRequirements {
+    pub required_nodes: HashSet<NodeField>,
+}
+
+impl NodeRequirements {
+    /// Create from list of compiled rules
+    pub fn from_rules(rules: &[CompiledRule]) -> Self {
+        let mut required_nodes = HashSet::new();
+        for rule in rules {
+            for (field, _) in &rule.bool_checks {
+                required_nodes.insert(*field);
+            }
+            for (field, _, _) in &rule.threshold_checks {
+                required_nodes.insert(*field);
+            }
+        }
+        Self { required_nodes }
+    }
+
+    /// Check if a node is required by any rule
+    pub fn requires(&self, field: NodeField) -> bool {
+        self.required_nodes.contains(&field)
+    }
+}
+
+/// Load and compile rules from JSON file
+pub fn load_rules_from_json(path: &str) -> Result<(Vec<CompiledRule>, NodeRequirements), String> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read rules file: {}", e))?;
+
+    let config: RulesConfig =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse rules JSON: {}", e))?;
+
+    let mut compiled_rules = Vec::new();
+
+    for json_rule in &config.rules {
+        let compiled = parse_condition(&json_rule.condition, &json_rule.confidence)?;
+        compiled_rules.push(compiled);
+    }
+
+    let requirements = NodeRequirements::from_rules(&compiled_rules);
+
+    Ok((compiled_rules, requirements))
+}
+
+/// Parse a condition string into a compiled rule
+fn parse_condition(condition: &str, confidence: &str) -> Result<CompiledRule, String> {
+    let mut bool_checks = Vec::new();
+    let mut threshold_checks = Vec::new();
+
+    // Split by AND
+    let parts: Vec<&str> = condition.split(" && ").collect();
+
+    for part in parts {
+        let part = part.trim();
+
+        // Check for threshold comparison (e.g., "given_jw > 0.85")
+        if part.contains(" > ") {
+            let sides: Vec<&str> = part.split(" > ").collect();
+            if sides.len() == 2 {
+                if let Some(field) = NodeField::from_str(sides[0].trim()) {
+                    if let Ok(threshold) = sides[1].trim().parse::<f64>() {
+                        threshold_checks.push((field, ">", threshold));
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Check for >= comparison
+        if part.contains(" >=") {
+            let sides: Vec<&str> = part.split(" >=").collect();
+            if sides.len() == 2 {
+                if let Some(field) = NodeField::from_str(sides[0].trim()) {
+                    if let Ok(threshold) = sides[1].trim().parse::<f64>() {
+                        threshold_checks.push((field, ">=", threshold));
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Boolean node - check if negated
+        if part.starts_with("!") {
+            let node_str = &part[1..];
+            if let Some(field) = NodeField::from_str(node_str) {
+                bool_checks.push((field, false));
+            }
+        } else {
+            if let Some(field) = NodeField::from_str(part) {
+                bool_checks.push((field, true));
+            }
+        }
+    }
+
+    let conf = match confidence {
+        "definite" => MatchConfidence::Definite,
+        "high" => MatchConfidence::High,
+        "medium" => MatchConfidence::Medium,
+        "review" => MatchConfidence::Review,
+        _ => MatchConfidence::NonMatch,
+    };
+
+    Ok(CompiledRule {
+        bool_checks,
+        threshold_checks,
+        confidence: conf,
+        original_condition: condition.to_string(),
+    })
+}
+
+/// Evaluate a compiled rule against NodeResults
+pub fn evaluate_compiled(rule: &CompiledRule, nodes: &NodeResults) -> bool {
+    // Check all boolean requirements
+    for (field, required) in &rule.bool_checks {
+        if field.get(nodes) != *required {
+            return false;
+        }
+    }
+
+    // Check threshold requirements
+    for (field, op, threshold) in &rule.threshold_checks {
+        let value = match field {
+            NodeField::GivenJw => nodes.given_jw,
+            NodeField::GivenBigramJaccard => nodes.given_bigram_jaccard,
+            _ => return false,
+        };
+
+        let pass = match *op {
+            ">" => value > *threshold,
+            ">=" => value >= *threshold,
+            "<" => value < *threshold,
+            "<=" => value <= *threshold,
+            _ => false,
+        };
+
+        if !pass {
+            return false;
+        }
+    }
+
+    true
 }
 
 impl RecordFields {
@@ -471,6 +751,24 @@ impl RuleMatcher {
     /// - **Corroboration-required:** Ambiguous name match needs a second
     ///   independent signal (phone/email/DOB/address) to confirm (R4-R10)
     pub fn apply_rules(&self, nodes: &NodeResults) -> RuleDecision {
+        // If JSON rules are loaded, use them first (for reproducibility)
+        if let Some(rules) = &self.compiled_rules {
+            for rule in rules {
+                if evaluate_compiled(rule, nodes) {
+                    return RuleDecision {
+                        classification: rule.confidence,
+                        rule: rule.original_condition.clone(),
+                    };
+                }
+            }
+            // JSON rules didn't match - return NonMatch
+            return RuleDecision {
+                classification: MatchConfidence::NonMatch,
+                rule: "no JSON rule matched".to_string(),
+            };
+        }
+
+        // Fallback to hardcoded rules
         let family_matches = nodes.family_exact || nodes.family_st || nodes.family_romanization;
 
         // ═══ Tier 1: Name-sufficient (no corroboration needed) ═══
