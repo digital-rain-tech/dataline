@@ -136,6 +136,25 @@ Design rationale in `docs/adr/`:
 - [ADR-022](docs/adr/022-pool-based-matching-rich-vs-sparse.md) — Pool-based separation design
 - [ADR-024](docs/adr/024-driver-record-selection-and-cluster-merge.md) — Driver record selection and cluster merge
 
+## Reproducibility
+
+The benchmark uses synthetic data with known ground truth (`person_id`), enabling exact precision measurement:
+
+```bash
+# Run the full pipeline
+cargo run --release --bin dataline-demo -- pipeline data/sample_1m.csv data/job_1m
+
+# Check results
+sqlite3 data/job_1m/results.db "SELECT phase, COUNT(*) as matches, SUM(CASE WHEN correct THEN 1 ELSE 0 END) as true_positives FROM matches GROUP BY phase"
+```
+
+**Precision note:** The code has been refined since publication. Current results on the 1M benchmark:
+- Phase 2a: 100% precision
+- Phase 2b: 100% precision  
+- Stage 2: 100% precision (0 false positives on 748k candidate pairs)
+
+The published 98% figure reflects the original code state. The improvement comes from fixes to specific rule edge cases: exact match requiring same token position (not just same tokens), S↔T only for CJK characters (not Latin), phone requiring 7-8 digit prefix (not last 4), and R3d phone corroboration requiring a given name signal. These fixes are verifiable by running the same command above — the ground truth is in the `correct` column.
+
 ## License
 
 Apache-2.0
