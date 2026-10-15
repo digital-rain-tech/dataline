@@ -470,50 +470,53 @@ pub fn phase1_seed_clusters(
     };
 
     // Helper: romanize name to common phonetic form for cross-script grouping.
-    // CJK → Jyutping syllables, Latin → lowercase tokens.
-    // Both "陳大文" and "Chan Tai Man" should produce similar keys.
+    // CJK → HK Government romanization (the HKID system, first variant;
+    // Jyutping when the character has none), Latin → lowercase tokens.
+    // Both "陳大文" and "CHAN Tai Man" produce "chan tai man".
     let jyutping_dict_ref = &jyutping_dict;
+    let hk_roman_dict = signals::HkRomanDict::default();
+    let roman_char = |c: char| -> Option<String> {
+        let t = norm_dict.to_traditional(c);
+        hk_roman_dict
+            .get_romanizations(t)
+            .first()
+            .cloned()
+            .or_else(|| {
+                jyutping_dict_ref
+                    .get_primary(t)
+                    .map(|jp| signals::strip_jyutping_tone(jp).to_lowercase())
+            })
+    };
     let romanize_name = |comp: &NameComponents| -> String {
         let mut parts = Vec::new();
 
-        // Family name → Jyutping or lowercase
+        // Family name → romanization of its characters, or lowercase
         if let Some(ref f) = comp.family {
             let first_char = f.chars().next().unwrap_or('?');
             if tokenizers::is_cjk_char(first_char) {
-                // CJK → Jyutping
-                for c in f.chars() {
-                    let normalized = norm_dict.to_traditional(c);
-                    if let Some(jp) = jyutping_dict_ref.get_primary(normalized) {
-                        parts.push(signals::strip_jyutping_tone(jp).to_lowercase());
-                    }
-                }
+                parts.extend(f.chars().filter_map(|c| roman_char(c)));
             } else {
                 // Latin → check HK surname table for canonical form
-                if let Some(ch) = names::surname_to_char(f) {
-                    if let Some(jp) = jyutping_dict_ref.get_primary(ch) {
-                        parts.push(signals::strip_jyutping_tone(jp).to_lowercase());
-                    }
-                } else {
-                    parts.push(f.to_lowercase());
+                match names::surname_to_char(f).and_then(|ch| roman_char(ch)) {
+                    Some(r) => parts.push(r),
+                    None => parts.push(f.to_lowercase()),
                 }
             }
         }
 
-        // Given name → Jyutping or lowercase tokens
+        // An English name after a separator ("CHAN Tai Man, Peter") is not
+        // part of the romanized Chinese name.
+        let head = comp.raw.split([',', ';']).next().unwrap_or("");
+
+        // Given name → romanization per character, or lowercase tokens
         for g in &comp.given {
-            for c in g.chars() {
-                if tokenizers::is_cjk_char(c) {
-                    let normalized = norm_dict.to_traditional(c);
-                    if let Some(jp) = jyutping_dict_ref.get_primary(normalized) {
-                        parts.push(signals::strip_jyutping_tone(jp).to_lowercase());
-                    }
-                } else if c.is_alphabetic() {
-                    // Collect Latin chars into token
-                    // (handled below as whole token)
-                }
-            }
-            // If given token is all Latin, add as-is
-            if !g.chars().any(|c| tokenizers::is_cjk_char(c)) && !g.is_empty() {
+            if g.chars().any(|c| tokenizers::is_cjk_char(c)) {
+                parts.extend(
+                    g.chars()
+                        .filter(|c| tokenizers::is_cjk_char(*c))
+                        .filter_map(|c| roman_char(c)),
+                );
+            } else if !g.is_empty() && head.contains(g.as_str()) {
                 parts.push(g.to_lowercase());
             }
         }
@@ -523,16 +526,18 @@ pub fn phase1_seed_clusters(
 
     // Multi-field exact grouping at decreasing confidence levels.
     // Each pass uses a different combination of name normalization + corroboration fields.
-    // Records matched in earlier (higher confidence) passes are NOT re-grouped in later passes.
+    // Records grouped in an earlier pass are not re-grouped later, except that
+    // a phone pass may add a new record to an existing phone-corroborated
+    // cluster (a third script of the same person).
     //
-    // Pass order (highest confidence first):
-    //   1. name + phone + district  (3 fields = Definite)
-    //   2. name + phone             (2 fields = High)
-    //   3. name + district           (2 fields = Medium)
-    //   4. S↔T name + phone          (cross-variant + corroboration = High)
-    //   5. S↔T name + district       (cross-variant + location = Medium)
-    //   6. stripped name + phone      (honorific-stripped + corroboration = High)
-    //   7. stripped name only         (candidate group, lowest = name-only blocking)
+    // Pass order: every phone pass before any district or name-only pass.
+    //   1. name + phone + district   (Definite)
+    //   2. name + phone              (High)
+    //   3. S↔T name + phone           (High)
+    //   4. stripped name + phone      (High)
+    //   5. romanized name + phone     (High, cross-script)
+    //   6. name / S↔T / romanized + district  (cohort candidates)
+    //   7. stripped / romanized name only     (cohort candidates)
 
     // Helper: build composite key from name + optional fields
     let composite_key = |name: &str, phone: Option<&str>, district: Option<&str>| -> String {
@@ -563,14 +568,17 @@ pub fn phase1_seed_clusters(
         // Exact name passes
         ("exact+phone+district", 0, true, true),    // Definite: 3 fields
         ("exact+phone", 0, true, false),             // High: name + phone
-        ("exact+district", 0, false, true),           // Medium: name + district
-        // S↔T passes
+        // Every phone pass runs before any district or name-only pass. A pass
+        // skips records already grouped, so a record that joined a
+        // name+district cohort first could never reach its own phone-matched
+        // cross-script records (same person, CRM 譚大明 / billing TAM Daai Ming).
         ("s_t+phone", 1, true, false),               // High: S↔T + phone
-        ("s_t+district", 1, false, true),             // Medium: S↔T + district
-        // Stripped passes
         ("stripped+phone", 2, true, false),           // High: stripped + phone
-        // Romanization passes (cross-script: CJK ↔ Latin)
+        // Romanization pass (cross-script: CJK ↔ Latin)
         ("roman+phone", 3, true, false),             // High: romanized name + phone
+        // District passes (cohort candidates)
+        ("exact+district", 0, false, true),           // Medium: name + district
+        ("s_t+district", 1, false, true),             // Medium: S↔T + district
         ("roman+district", 3, false, true),           // Medium: romanized name + district
         // Fallback passes (name only — lowest confidence)
         ("stripped", 2, false, false),                // Candidate: stripped name only
@@ -582,8 +590,14 @@ pub fn phase1_seed_clusters(
         let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
 
         for i in 0..prepared.len() {
-            if record_to_cluster.contains_key(&i) {
-                continue; // Already grouped in a higher-confidence pass
+            if let Some(&cid) = record_to_cluster.get(&i) {
+                // Already grouped in a higher-confidence pass. In a phone pass a
+                // phone-corroborated cluster still takes part in grouping, so a
+                // record of the same person in another script can join it
+                // (CRM 陳 + legacy 陈 grouped first, then billing CHAN).
+                if !(use_phone && clusters[cid].phone_corroborated) {
+                    continue;
+                }
             }
 
             let name_key = name_fn(i);
@@ -696,6 +710,42 @@ pub fn phase1_seed_clusters(
     (clusters, consumed, all_matches)
 }
 
+/// Phone numbers shared by several people (office switchboards, family
+/// landlines) are not evidence that two records are one person. A number seen
+/// with more than `max_surnames` distinct surname sounds, or on more than
+/// `max_records` records, is dropped from every record that carries it, so
+/// those records are grouped and matched as if they had no phone.
+/// Returns (shared numbers, records affected).
+pub fn demote_shared_phones(
+    prepared: &mut [PreparedRecord],
+    max_surnames: usize,
+    max_records: usize,
+) -> (usize, usize) {
+    let mut by_phone: HashMap<&str, (usize, std::collections::HashSet<&str>)> = HashMap::new();
+    for rec in prepared.iter() {
+        if let Some(ph) = rec.fields.phone.as_deref().filter(|p| !p.is_empty()) {
+            let entry = by_phone.entry(ph).or_default();
+            entry.0 += 1;
+            if !rec.surname_phonetic_key.is_empty() {
+                entry.1.insert(rec.surname_phonetic_key.as_str());
+            }
+        }
+    }
+    let shared: std::collections::HashSet<String> = by_phone
+        .into_iter()
+        .filter(|(_, (n, surnames))| *n > max_records || surnames.len() > max_surnames)
+        .map(|(ph, _)| ph.to_string())
+        .collect();
+    let mut affected = 0;
+    for rec in prepared.iter_mut() {
+        if rec.fields.phone.as_ref().map_or(false, |p| shared.contains(p)) {
+            rec.fields.phone = None;
+            affected += 1;
+        }
+    }
+    (shared.len(), affected)
+}
+
 // ─── Phase 2: Assign Remaining Records to Clusters ───
 
 /// Phase 2a: Validate within-cluster matches using rule engine.
@@ -790,7 +840,10 @@ pub fn phase2_assign_to_clusters(
     // Build surname key → cluster indices for fast lookup
     let mut surname_to_clusters: HashMap<String, Vec<usize>> = HashMap::new();
     for (ci, cluster) in clusters.iter().enumerate() {
-        if !cluster.surname_key.is_empty() {
+        // Only phone-corroborated clusters attract. A district or name-only
+        // cluster is a cohort of possibly different people; assigning a record
+        // to its attractor would merge on a name alone.
+        if !cluster.surname_key.is_empty() && cluster.phone_corroborated {
             surname_to_clusters
                 .entry(cluster.surname_key.clone())
                 .or_default()
@@ -798,8 +851,11 @@ pub fn phase2_assign_to_clusters(
         }
     }
 
+    // A record without a phone has no corroborator: it is Pool B (sparse) and
+    // stays UNRESOLVED rather than joining a cluster on its name alone.
     let unmatched: Vec<usize> = (0..prepared.len())
         .filter(|i| !consumed.contains(i))
+        .filter(|&i| prepared[i].fields.phone.as_deref().map_or(false, |p| !p.is_empty()))
         .collect();
 
     eprintln!(
@@ -1108,6 +1164,56 @@ mod tests {
             source: "test".to_string(),
             fields,
         }
+    }
+
+    fn prepare(records: &[Record], dir: &str) -> Vec<PreparedRecord> {
+        let job = JobDir::new(Path::new(dir));
+        let _ = fs::remove_dir_all(&job.root);
+        job.create_dirs().unwrap();
+        stage0_parse(records, &job)
+    }
+
+    fn matched(matches: &[MatchResult], a: &str, b: &str) -> bool {
+        matches.iter().any(|m| {
+            (m.left_id == a && m.right_id == b) || (m.left_id == b && m.right_id == a)
+        })
+    }
+
+    #[test]
+    fn test_phone_passes_run_before_district_cohorts() {
+        // CRM-1 shares name and district with a different person (CRM-2), so a
+        // name+district pass would put them in one cohort. Its own legacy and
+        // billing records share its phone and must still reach it.
+        let records = vec![
+            make_record("CRM-1", "譚大明先生", "64088689", "Causeway Bay"),
+            make_record("CRM-2", "譚大明先生", "91112222", "Causeway Bay"),
+            make_record("LEGACY-1", "谭大明", "64088689", ""),
+            make_record("BILL-1", "TAM Daai Ming", "64088689", "Causeway Bay"),
+        ];
+        let prepared = prepare(&records, "/tmp/dataline_test_phone_order");
+        let (clusters, _, _) = phase1_seed_clusters(&prepared);
+        let matches = phase2a_validate_clusters(&prepared, &clusters);
+        assert!(matched(&matches, "CRM-1", "LEGACY-1"), "{:?}", matches);
+        assert!(matched(&matches, "CRM-1", "BILL-1"), "{:?}", matches);
+        assert!(!matches.iter().any(|m| m.left_id == "CRM-2" || m.right_id == "CRM-2"));
+    }
+
+    #[test]
+    fn test_demote_shared_phones() {
+        let records = vec![
+            // Office switchboard: three surnames on one number
+            make_record("A", "陳大文", "21234567", ""),
+            make_record("B", "李小明", "21234567", ""),
+            make_record("C", "黃志強", "21234567", ""),
+            // One person in two scripts: one surname sound
+            make_record("D", "陳家輝先生", "91234567", ""),
+            make_record("E", "CHAN Ka Fai", "91234567", ""),
+        ];
+        let mut prepared = prepare(&records, "/tmp/dataline_test_shared_phone");
+        let (numbers, affected) = demote_shared_phones(&mut prepared, 2, 8);
+        assert_eq!((numbers, affected), (1, 3));
+        assert!(prepared[..3].iter().all(|r| r.fields.phone.is_none()));
+        assert!(prepared[3..].iter().all(|r| r.fields.phone.is_some()));
     }
 
     #[test]

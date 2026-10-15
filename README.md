@@ -152,18 +152,52 @@ sqlite3 data/job_1m/results.db "SELECT m.phase, COUNT(*) AS matches, SUM(a.perso
 
 The `correct` column in `matches.csv` holds the same ground-truth check.
 
-**Precision note:** The code has changed since the paper. Current results on the 1M benchmark:
+**Precision note:** The code has changed since the paper. Current results on the 1M benchmark (12-core Apple M2 Max, about 68 s):
 
 | Phase | Matches | True Positives | Precision |
 |---|---|---|---|
-| Phase 2a (phone-corroborated) | 20,878 | 20,877 | 100.0% |
-| Phase 2b (attractor assignment) | 11,498 | 11,498 | 100.0% |
-| Stage 2 (sparse pairwise, 459,569 pairs) | 1 | 1 | 100.0% |
-| **Total** | **32,377** | **32,376** | **100.0%** |
+| Phase 2a (phone-corroborated) | 825,411 | 825,405 | 100.0% |
+| Phase 2b (attractor assignment) | 0 | — | — |
+| Stage 2 (sparse pairwise, 264 pairs) | 2 | 0 | 0.0% |
+| **Total** | **825,413** | **825,405** | **100.0%** |
 
-The one false positive is two different people with the same name and the same phone number.
+The six false positives in Phase 2a are pairs of different people with the same full name and the same phone number.
 
-The published 98% figure reflects the original code state. The changes since then are fixes to specific rule edge cases: exact match requiring same token position (not just same tokens), S↔T only for CJK characters (not Latin), phone requiring 7-8 digit prefix (not last 4), R3d phone corroboration requiring a given name signal, and cross-script given-name matching (陳大文 vs CHAN Tai Man), which compared only the first Latin syllable before. Run the commands above to verify these numbers.
+**Recall.** Precision alone hides how much is linked. Counting the record pairs joined by any chain of matches (`python3 scripts/pair_metrics.py data/job_1m/results.db`), the 1M benchmark has 2,479,642 same-person pairs:
+
+| Code | Linked pairs | Wrong | Pair precision | Pair recall |
+|---|---|---|---|---|
+| Before the October 2026 fixes | 33,236 | 1 | 99.997% | 1.3% |
+| Current | 952,360 | 16 | 99.998% | 38.4% |
+
+Most of the rest is by design: a record with no phone (20% of CRM, 60% of Legacy and 30% of English records) has no corroborator and stays UNRESOLVED, and an English-only name (`Kenneth Tam`) carries no Chinese given name to check.
+
+**Shared phones.** An office switchboard or a family landline is not evidence that two records are one person. A number seen with more than two surname sounds, or on more than eight records, is treated as no phone. To test this, generate a variant of the sample in which 15% of people have an office number (some at 20 large employers) and 8% share a household landline, carried on their CRM and English records half the time:
+
+```bash
+cargo run --release --bin dataline-demo -- generate 1000000 data/sample_1m_shared.csv --shared-phones
+# sha256 67292f03ad8c7f6711997ad0fee865047e0ab78ab6db3ae2055944c6f6039a04
+```
+
+| Code on the shared-phone sample | Linked pairs | Wrong | Pair precision | Pair recall |
+|---|---|---|---|---|
+| Before the October 2026 fixes | 31,076 | 179 | 99.42% | 1.2% |
+| Current | 865,745 | 18 | 99.998% | 34.9% |
+
+The generator's default output is unchanged byte for byte, so `sample_1m.csv` still regenerates exactly.
+
+The published 98% figure reflects the original code state. The changes since then are fixes to specific rule edge cases: exact match requiring same token position (not just same tokens), S↔T only for CJK characters (not Latin), phone requiring 7-8 digit prefix (not last 4), R3d phone corroboration requiring a given name signal, and cross-script given-name matching (陳大文 vs CHAN Tai Man), which compared only the first Latin syllable before.
+
+The October 2026 recall fixes:
+
+- **Phone passes before cohort passes.** Phase 1 grouped name + district before the cross-script phone passes, and each pass skips records already grouped. A CRM record that shared a name and district with someone else went into that cohort and never reached its own billing or legacy record, even with the same phone.
+- **Phone passes extend phone clusters.** When CRM 陳 and legacy 陈 were grouped first, billing CHAN could not join them. A later phone pass may now add a record to an existing phone-corroborated cluster (never merging two clusters).
+- **Romanized key uses HK Government romanization.** Billing names are HKID romanizations; the key used Jyutping (欣 → `jan`, not `Yan`) and included the English name (`TAM Daai Ming; Kenneth`). It now uses the first HK Government romanization and drops the name after the separator.
+- **Dictionary gaps filled from S↔T.** The Jyutping file has 谭 but not 譚, and lookups normalise to Traditional first, so the surname Tam had no reading; the HK Government file had neither. Missing characters now take their counterpart's entry. The generator had written such characters raw into billing names (`LAI Lok 軒`); 26,349 rows of `sample_1m.csv` contain one, and that file is kept as published. The test fixture is regenerated.
+- **Phase 2b only for records with a phone, only into phone clusters.** It assigned phoneless records to a cluster on the name alone; all 29 such assignments on the benchmark were wrong.
+- **Shared phones** as above.
+
+Run the commands above to verify these numbers.
 
 ## License
 

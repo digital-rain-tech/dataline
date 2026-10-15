@@ -73,7 +73,7 @@ LEGACY-00027,legacy,27,邓嘉豪,,
 CRM-00028,crm,28,陳詠琪先生,Sham Shui Po,
 BILL-00028,billing,28,CHAN Wing Kei; Cindy,Sham Shui Po,96119745
 CRM-00029,crm,29,梁樂軒先生,Yuen Long,69391999
-BILL-00029,billing,29,LEUNG Lok 軒; Henry,Yuen Long,69391999
+BILL-00029,billing,29,LEUNG Lok Hin; Henry,Yuen Long,69391999
 CRM-00030,crm,30,梁玉雯先生,Quarry Bay,98328286
 BILL-00030,billing,30,LEUNG Yuk Man,Quarry Bay,98328286
 CRM-00031,crm,31,張梓浚先生,North Point,66648142
@@ -163,7 +163,7 @@ CRM-00062,crm,62,陳穎恒先生,Hung Hom,67977908
 BILL-00062,billing,62,CHAN Wing Hang; John,Hung Hom,67977908
 LEGACY-00062,legacy,62,陈颖恒,,
 CRM-00063,crm,63,張子軒先生,Stanley,
-BILL-00063,billing,63,CHEUNG Chi 軒; Robert,,98022271
+BILL-00063,billing,63,CHEUNG Chi Hin; Robert,,98022271
 LEGACY-00063,legacy,63,张子轩,,
 CRM-00064,crm,64,蘇昌明先生,Kowloon Tong,91834080
 BILL-00064,billing,64,SO Coeng Ming,Kowloon Tong,91834080
@@ -271,7 +271,7 @@ CRM-00103,crm,103,余錦輝先生,Lai Chi Kok,91291286
 BILL-00103,billing,103,YU Kam Fai,Lai Chi Kok,91291286
 LEGACY-00103,legacy,103,余锦辉,,
 CRM-00104,crm,104,梁樂軒先生,Lai Chi Kok,
-BILL-00104,billing,104,LEUNG Lok 軒,,93122215
+BILL-00104,billing,104,LEUNG Lok Hin,,93122215
 LEGACY-00104,legacy,104,梁乐轩,,93122215
 CRM-00105,crm,105,郭昌偉先生,Central,
 BILL-00105,billing,105,KWOK Coeng Wai,,64717598
@@ -456,7 +456,7 @@ CRM-00172,crm,172,甘珍珍先生,Kwun Tong,68574972
 BILL-00172,billing,172,KAM Chan Chan,,68574972
 LEGACY-00172,legacy,172,甘珍珍,,
 CRM-00173,crm,173,羅子軒先生,Sham Shui Po,99021830
-BILL-00173,billing,173,LO Chi 軒,Sham Shui Po,99021830
+BILL-00173,billing,173,LO Chi Hin,Sham Shui Po,99021830
 LEGACY-00173,legacy,173,罗子轩,,
 CRM-00174,crm,174,曾曉輝先生,Tai Po,65741080
 BILL-00174,billing,174,TSANG Hiu Fai,Tai Po,65741080
@@ -478,7 +478,7 @@ CRM-00180,crm,180,張詠盈先生,Lai Chi Kok,60146897
 BILL-00180,billing,180,CHEUNG Wing Ying; Rachel,Lai Chi Kok,60146897
 ENG-00180,english_system,180,Rachel Cheung,,60146897
 CRM-00181,crm,181,梁曉軒先生,Wan Chai,99764016
-BILL-00181,billing,181,LEUNG Hiu 軒; John,Wan Chai,99764016
+BILL-00181,billing,181,LEUNG Hiu Hin; John,Wan Chai,99764016
 CRM-00182,crm,182,曾傑明先生,Tuen Mun,
 BILL-00182,billing,182,TSANG Git Ming; Thomas,Tuen Mun,61456677
 LEGACY-00182,legacy,182,曾杰明,,
@@ -567,7 +567,7 @@ CRM-00213,crm,213,陳麗先生,Sham Shui Po,68792083
 BILL-00213,billing,213,CHAN Lai,,68792083
 LEGACY-00213,legacy,213,陈丽,,68792083
 CRM-00214,crm,214,許子軒先生,Stanley,96481379
-BILL-00214,billing,214,HUI Chi 軒,,96481379
+BILL-00214,billing,214,HUI Chi Hin,,96481379
 LEGACY-00214,legacy,214,许子轩,,96481379
 CRM-00215,crm,215,陳秀玲先生,North Point,90999445
 BILL-00215,billing,215,CHAN Sau Ling; Emily,North Point,90999445
@@ -581,7 +581,7 @@ CRM-00218,crm,218,譚子晴先生,Tuen Mun,96403308
 BILL-00218,billing,218,TAM Chi Ching; Danny,,96403308
 LEGACY-00218,legacy,218,谭子晴,,96403308
 CRM-00219,crm,219,陳樂軒先生,Mong Kok,60954466
-BILL-00219,billing,219,CHAN Lok 軒; John,Mong Kok,60954466
+BILL-00219,billing,219,CHAN Lok Hin; John,Mong Kok,60954466
 LEGACY-00219,legacy,219,陈乐轩,,60954466
 CRM-00220,crm,220,鄭國華先生,Sha Tin,94554382
 BILL-00220,billing,220,CHENG Kwok Wah,Sha Tin,94554382
@@ -614,7 +614,7 @@ CRM-00230,crm,230,梁淑芬先生,Quarry Bay,63325771
 BILL-00230,billing,230,LEUNG Suk Fan; Alice,Quarry Bay,63325771
 LEGACY-00230,legacy,230,梁淑芬,,
 CRM-00231,crm,231,余曉軒先生,Tsuen Wan,62922930
-BILL-00231,billing,231,YU Hiu 軒; Eric,Tsuen Wan,62922930
+BILL-00231,billing,231,YU Hiu Hin; Eric,Tsuen Wan,62922930
 CRM-00232,crm,232,林偉強先生,Lai Chi Kok,
 BILL-00232,billing,232,LAM Wai Keung,Lai Chi Kok,64993737
 CRM-00233,crm,233,楊裕明先生,Hung Hom,99825571
@@ -835,7 +835,7 @@ BILL-00312,billing,312,CHEUNG Chi Gin; William,Tsuen Wan,92087632
 CRM-00313,crm,313,朱志先生,Mong Kok,63595170
 BILL-00313,billing,313,CHU Chi; Patrick,Mong Kok,63595170
 CRM-00314,crm,314,甘銘輝先生,Wan Chai,92030876
-BILL-00314,billing,314,KAM 銘 Fai; Tony,,92030876
+BILL-00314,billing,314,KAM Ming Fai; Tony,,92030876
 LEGACY-00314,legacy,314,甘铭辉,,
 CRM-00315,crm,315,袁欣玲先生,Stanley,62147300
 BILL-00315,billing,315,YUEN Yan Ling; Grace,Stanley,62147300
@@ -902,14 +902,14 @@ LEGACY-00336,legacy,336,袁峰,,63982109
 CRM-00337,crm,337,關雅雯先生,Hung Hom,64472409
 BILL-00337,billing,337,KWAN Nga Man,Hung Hom,64472409
 CRM-00338,crm,338,鄭曉軒先生,North Point,
-BILL-00338,billing,338,CHENG Hiu 軒; Andy,North Point,61075403
+BILL-00338,billing,338,CHENG Hiu Hin; Andy,North Point,61075403
 ENG-00338,english_system,338,Andy Cheng,,61075403
 CRM-00339,crm,339,梁恩欣先生,Mong Kok,
 BILL-00339,billing,339,LEUNG Yan Yan,,90627561
 CRM-00340,crm,340,賴恩晴先生,Hung Hom,60272709
 BILL-00340,billing,340,LAI Yan Ching; Sarah,Hung Hom,60272709
 CRM-00341,crm,341,楊子軒先生,Central,
-BILL-00341,billing,341,YEUNG Chi 軒; John,,99311099
+BILL-00341,billing,341,YEUNG Chi Hin; John,,99311099
 LEGACY-00341,legacy,341,杨子轩,,
 CRM-00342,crm,342,謝燕玲先生,Aberdeen,93550573
 BILL-00342,billing,342,TSE Yan Ling,Aberdeen,93550573
@@ -1028,7 +1028,7 @@ CRM-00381,crm,381,羅芳珍先生,North Point,
 BILL-00381,billing,381,LAW Fong Chan; Michelle,North Point,90972531
 ENG-00381,english_system,381,Michelle Law,,
 CRM-00382,crm,382,洪樂軒先生,Tsuen Wan,90207155
-BILL-00382,billing,382,HUNG Lok 軒; Robert,,90207155
+BILL-00382,billing,382,HUNG Lok Hin; Robert,,90207155
 LEGACY-00382,legacy,382,洪乐轩,,
 CRM-00383,crm,383,張浩明先生,Hung Hom,97496888
 BILL-00383,billing,383,CHEUNG Hou Ming; John,Hung Hom,97496888
@@ -1055,7 +1055,7 @@ CRM-00391,crm,391,吳俊傑先生,Tuen Mun,90170615
 BILL-00391,billing,391,WU Chun Git; Samuel,Tuen Mun,90170615
 LEGACY-00391,legacy,391,吴俊杰,,90170615
 CRM-00392,crm,392,彭銘輝先生,Tai Po,98662055
-BILL-00392,billing,392,PANG 銘 Fai; Robert,,98662055
+BILL-00392,billing,392,PANG Ming Fai; Robert,,98662055
 CRM-00393,crm,393,馬敏慧先生,Tsuen Wan,66835836
 BILL-00393,billing,393,MA Man Wai; Jennifer,,66835836
 LEGACY-00393,legacy,393,马敏慧,,66835836
@@ -1154,7 +1154,7 @@ CRM-00428,crm,428,上官詠恒先生,Causeway Bay,
 BILL-00428,billing,428,SHEUNG KWUN Wing Hang; Henry,Causeway Bay,65673101
 LEGACY-00428,legacy,428,上官咏恒,,65673101
 CRM-00429,crm,429,劉樂軒先生,Tsuen Wan,94868184
-BILL-00429,billing,429,LAU Lok 軒; William,Tsuen Wan,94868184
+BILL-00429,billing,429,LAU Lok Hin; William,Tsuen Wan,94868184
 CRM-00430,crm,430,余詠盈先生,Tsim Sha Tsui,94688788
 BILL-00430,billing,430,YU Wing Ying; Helen,Tsim Sha Tsui,94688788
 LEGACY-00430,legacy,430,余咏盈,,
@@ -1243,7 +1243,7 @@ CRM-00462,crm,462,曾嘉玲先生,Hung Hom,
 BILL-00462,billing,462,TSANG Ka Ling; Michelle,Hung Hom,62917634
 LEGACY-00462,legacy,462,曾嘉玲,,
 CRM-00463,crm,463,陳梓軒先生,Tai Po,62844926
-BILL-00463,billing,463,CHAN Chi 軒; Robert,Tai Po,62844926
+BILL-00463,billing,463,CHAN Chi Hin; Robert,Tai Po,62844926
 CRM-00464,crm,464,彭美儀先生,Tuen Mun,
 BILL-00464,billing,464,PANG Mei Ji,Tuen Mun,69671149
 CRM-00465,crm,465,張樂恒先生,Causeway Bay,60859488
@@ -1577,7 +1577,7 @@ LEGACY-00584,legacy,584,上官家诚,,93083042
 CRM-00585,crm,585,羅國華先生,North Point,61368075
 BILL-00585,billing,585,LAW Kwok Wah; Raymond,North Point,61368075
 CRM-00586,crm,586,馬銘輝先生,Tsim Sha Tsui,92769160
-BILL-00586,billing,586,MA 銘 Fai; Raymond,Tsim Sha Tsui,92769160
+BILL-00586,billing,586,MA Ming Fai; Raymond,Tsim Sha Tsui,92769160
 ENG-00586,english_system,586,Raymond Ma,,92769160
 CRM-00587,crm,587,許家明先生,Lai Chi Kok,60596985
 BILL-00587,billing,587,HUI Ka Ming; Kevin,Lai Chi Kok,60596985
@@ -1635,7 +1635,7 @@ LEGACY-00605,legacy,605,罗玉莲,,
 CRM-00606,crm,606,馮豪先生,Kowloon Tong,
 BILL-00606,billing,606,FUNG Hou; Peter,,64269015
 CRM-00607,crm,607,許曉軒先生,Central,96865740
-BILL-00607,billing,607,HUI Hiu 軒,Central,96865740
+BILL-00607,billing,607,HUI Hiu Hin,Central,96865740
 CRM-00608,crm,608,余立志先生,Central,64264136
 BILL-00608,billing,608,YU Laap Chi; Chris,,64264136
 LEGACY-00608,legacy,608,余立志,,64264136
@@ -1656,7 +1656,7 @@ CRM-00613,crm,613,余燕玲先生,Stanley,91502185
 BILL-00613,billing,613,YU Yan Ling; Rachel,Stanley,91502185
 ENG-00613,english_system,613,Rachel Yu,,91502185
 CRM-00614,crm,614,陳曉軒先生,Tsim Sha Tsui,66814974
-BILL-00614,billing,614,CHAN Hiu 軒; Eric,,66814974
+BILL-00614,billing,614,CHAN Hiu Hin; Eric,,66814974
 LEGACY-00614,legacy,614,陈晓轩,,
 CRM-00615,crm,615,歐陽明先生,Sham Shui Po,60588457
 BILL-00615,billing,615,OUYEUNG Ming; William,Sham Shui Po,60588457
@@ -1770,7 +1770,7 @@ BILL-00654,billing,654,CHEUNG Hiu Yan; Wendy,Kowloon Tong,63660171
 CRM-00655,crm,655,麥志華先生,Mong Kok,
 BILL-00655,billing,655,MAK Chi Wah; Robert,Mong Kok,90372132
 CRM-00656,crm,656,劉曉軒先生,Kwun Tong,
-BILL-00656,billing,656,LAU Hiu 軒; Patrick,Kwun Tong,68126575
+BILL-00656,billing,656,LAU Hiu Hin; Patrick,Kwun Tong,68126575
 CRM-00657,crm,657,陳傑明先生,Tai Po,68335654
 BILL-00657,billing,657,CHAN Git Ming,,68335654
 LEGACY-00657,legacy,657,陈杰明,,
@@ -1840,7 +1840,7 @@ CRM-00683,crm,683,馮淑芬先生,North Point,65537699
 BILL-00683,billing,683,FUNG Suk Fan,North Point,65537699
 LEGACY-00683,legacy,683,冯淑芬,,65537699
 CRM-00684,crm,684,葉梓軒先生,Tai Po,
-BILL-00684,billing,684,YIP Chi 軒,Tai Po,91695581
+BILL-00684,billing,684,YIP Chi Hin,Tai Po,91695581
 CRM-00685,crm,685,葉俊賢先生,Wan Chai,98425445
 BILL-00685,billing,685,YIP Chun Yan,Wan Chai,98425445
 LEGACY-00685,legacy,685,叶俊贤,,
@@ -1924,7 +1924,7 @@ BILL-00714,billing,714,CHU Si Man; Angela,,93805512
 LEGACY-00714,legacy,714,朱诗敏,,
 ENG-00714,english_system,714,Angela Chu,,93805512
 CRM-00715,crm,715,司徒銘輝先生,Lai Chi Kok,92589410
-BILL-00715,billing,715,SZETO 銘 Fai; Eric,Lai Chi Kok,92589410
+BILL-00715,billing,715,SZETO Ming Fai; Eric,Lai Chi Kok,92589410
 ENG-00715,english_system,715,Eric Szeto,,92589410
 CRM-00716,crm,716,許思彤先生,North Point,96464210
 BILL-00716,billing,716,HUI Si Tung; Irene,,96464210
@@ -1965,7 +1965,7 @@ CRM-00729,crm,729,郭嘉慧先生,Stanley,61133607
 BILL-00729,billing,729,KWOK Ka Wai,Stanley,61133607
 LEGACY-00729,legacy,729,郭嘉慧,,
 CRM-00730,crm,730,鄭曉軒先生,Sham Shui Po,63888982
-BILL-00730,billing,730,CHENG Hiu 軒; Andy,Sham Shui Po,63888982
+BILL-00730,billing,730,CHENG Hiu Hin; Andy,Sham Shui Po,63888982
 CRM-00731,crm,731,葉芳先生,Aberdeen,64688712
 BILL-00731,billing,731,YIP Fong; Helen,Aberdeen,64688712
 LEGACY-00731,legacy,731,叶芳,,
@@ -2087,7 +2087,7 @@ CRM-00774,crm,774,梁文傑先生,Hung Hom,95848438
 BILL-00774,billing,774,LEUNG Man Git; Peter,,95848438
 ENG-00774,english_system,774,Peter Leung,,95848438
 CRM-00775,crm,775,馮子軒先生,Tai Po,
-BILL-00775,billing,775,FUNG Chi 軒; Andy,Tai Po,98015676
+BILL-00775,billing,775,FUNG Chi Hin; Andy,Tai Po,98015676
 LEGACY-00775,legacy,775,冯子轩,,
 ENG-00775,english_system,775,Andy Fung,,
 CRM-00776,crm,776,朱芳先生,Yuen Long,60018295
@@ -2099,7 +2099,7 @@ CRM-00778,crm,778,上官麗明先生,Stanley,68940686
 BILL-00778,billing,778,SHEUNG KWUN Lai Ming; Vivian,Stanley,68940686
 LEGACY-00778,legacy,778,上官丽明,,
 CRM-00779,crm,779,蔡詠軒先生,Kowloon Tong,96128052
-BILL-00779,billing,779,CHOI Wing 軒; Eric,Kowloon Tong,96128052
+BILL-00779,billing,779,CHOI Wing Hin; Eric,Kowloon Tong,96128052
 CRM-00780,crm,780,譚秀芳先生,Causeway Bay,66664476
 BILL-00780,billing,780,TAM Sau Fong; Angela,Causeway Bay,66664476
 ENG-00780,english_system,780,Angela Tam,,
@@ -2120,7 +2120,7 @@ CRM-00786,crm,786,司徒美珍先生,Tsim Sha Tsui,94607859
 BILL-00786,billing,786,SZETO Mei Chan; Helen,,94607859
 LEGACY-00786,legacy,786,司徒美珍,,94607859
 CRM-00787,crm,787,梁子軒先生,Tsim Sha Tsui,99888944
-BILL-00787,billing,787,LEUNG Chi 軒; John,,99888944
+BILL-00787,billing,787,LEUNG Chi Hin; John,,99888944
 LEGACY-00787,legacy,787,梁子轩,,99888944
 CRM-00788,crm,788,張德明先生,Kowloon Tong,60191013
 BILL-00788,billing,788,CHEUNG Tak Ming,Kowloon Tong,60191013
@@ -2213,7 +2213,7 @@ BILL-00821,billing,821,LAI Gin Kwok; Patrick,Sham Shui Po,98046850
 LEGACY-00821,legacy,821,赖建国,,98046850
 ENG-00821,english_system,821,Patrick Lai,,
 CRM-00822,crm,822,陳曉軒先生,Quarry Bay,97119388
-BILL-00822,billing,822,CHAN Hiu 軒,Quarry Bay,97119388
+BILL-00822,billing,822,CHAN Hiu Hin,Quarry Bay,97119388
 LEGACY-00822,legacy,822,陈晓轩,,
 CRM-00823,crm,823,鄭芳先生,Aberdeen,90233638
 BILL-00823,billing,823,CHENG Fong; Alice,,90233638
@@ -2235,7 +2235,7 @@ BILL-00829,billing,829,WAN Ting Ting; Emily,,94104740
 CRM-00830,crm,830,劉彤欣先生,Kwun Tong,98919062
 BILL-00830,billing,830,LAU Tung Yan; Grace,,98919062
 CRM-00831,crm,831,湯子軒先生,Tuen Mun,98379569
-BILL-00831,billing,831,TONG Chi 軒; William,,98379569
+BILL-00831,billing,831,TONG Chi Hin; William,,98379569
 LEGACY-00831,legacy,831,汤子轩,,
 CRM-00832,crm,832,黃嘉玲先生,Hung Hom,
 BILL-00832,billing,832,WONG Ka Ling,Hung Hom,91842367
@@ -2284,7 +2284,7 @@ LEGACY-00847,legacy,847,余丽珍,,
 CRM-00848,crm,848,周麗儀先生,Sha Tin,91974212
 BILL-00848,billing,848,CHOW Lai Ji; Alice,Sha Tin,91974212
 CRM-00849,crm,849,劉子軒先生,Mong Kok,98552087
-BILL-00849,billing,849,LAU Chi 軒; Peter,Mong Kok,98552087
+BILL-00849,billing,849,LAU Chi Hin; Peter,Mong Kok,98552087
 CRM-00850,crm,850,吳大文先生,Sha Tin,93770438
 BILL-00850,billing,850,WU Tai Man; Thomas,Sha Tin,93770438
 LEGACY-00850,legacy,850,吴大文,,
@@ -2340,7 +2340,7 @@ CRM-00869,crm,869,李豪先生,Aberdeen,
 BILL-00869,billing,869,LI Hou; Eric,Aberdeen,96967059
 LEGACY-00869,legacy,869,李豪,,
 CRM-00870,crm,870,蘇子軒先生,Tai Po,
-BILL-00870,billing,870,SO Chi 軒; David,Tai Po,68855477
+BILL-00870,billing,870,SO Chi Hin; David,Tai Po,68855477
 CRM-00871,crm,871,陳潔儀先生,Mong Kok,96781407
 BILL-00871,billing,871,CHAN Git Ji,Mong Kok,96781407
 LEGACY-00871,legacy,871,陈洁仪,,96781407
@@ -2582,7 +2582,7 @@ LEGACY-00958,legacy,958,李嘉仪,,93170969
 CRM-00959,crm,959,溫嘉偉先生,Wan Chai,67251884
 BILL-00959,billing,959,WAN Ka Wai; Patrick,Wan Chai,67251884
 CRM-00960,crm,960,劉樂軒先生,Yuen Long,96271251
-BILL-00960,billing,960,LAU Lok 軒; Michael,Yuen Long,96271251
+BILL-00960,billing,960,LAU Lok Hin; Michael,Yuen Long,96271251
 CRM-00961,crm,961,周錦榮先生,Quarry Bay,63482820
 BILL-00961,billing,961,CHOW Kam Wing; Eric,Quarry Bay,63482820
 LEGACY-00961,legacy,961,周锦荣,,63482820
@@ -2661,13 +2661,13 @@ BILL-00988,billing,988,LUI Ling; Alice,Tuen Mun,91909957
 LEGACY-00988,legacy,988,吕玲,,91909957
 ENG-00988,english_system,988,Alice Lui,,91909957
 CRM-00989,crm,989,陳梓軒先生,Kowloon Tong,69544967
-BILL-00989,billing,989,CHAN Chi 軒; Kevin,Kowloon Tong,69544967
+BILL-00989,billing,989,CHAN Chi Hin; Kevin,Kowloon Tong,69544967
 LEGACY-00989,legacy,989,陈梓轩,,
 ENG-00989,english_system,989,Kevin Chan,,69544967
 CRM-00990,crm,990,蔡慧先生,Tuen Mun,
 BILL-00990,billing,990,CHOI Wai,,64728013
 CRM-00991,crm,991,周曉軒先生,Tuen Mun,61924190
-BILL-00991,billing,991,CHOW Hiu 軒; William,Tuen Mun,61924190
+BILL-00991,billing,991,CHOW Hiu Hin; William,Tuen Mun,61924190
 LEGACY-00991,legacy,991,周晓轩,,61924190
 CRM-00992,crm,992,梁麗儀先生,Yuen Long,
 BILL-00992,billing,992,LEUNG Lai Ji; Angela,Yuen Long,64806440
