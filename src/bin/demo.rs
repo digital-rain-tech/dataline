@@ -437,13 +437,18 @@ fn romanize_char(c: char, hk_roman_dict: &HkRomanDict, jyutping_dict: &JyutpingD
     }
 }
 
-fn generate_csv(path: &str, num_persons: usize) {
+/// `shared_phones` adds office switchboards and family landlines: some CRM and
+/// English records carry a number other people also use. It draws from its own
+/// random stream, so the main stream (and the default output) is unchanged.
+fn generate_csv(path: &str, num_persons: usize, shared_phones: bool) {
     let jyutping_dict = JyutpingDict::default();
     let norm_dict = NormDict::default();
     let hk_roman_dict = HkRomanDict::default();
     let surname_weight: u32 = HK_SURNAME_FREQ.iter().map(|(_, _, w)| w).sum();
 
     let mut rng: u64 = 42;
+    let mut rng_shared: u64 = 7;
+    let mut prev_household: Option<(String, String, String, String)> = None;
     let mut file = std::fs::File::create(path).expect("create file");
     writeln!(file, "record_id,source,person_id,name,district,phone").unwrap();
 
@@ -452,7 +457,7 @@ fn generate_csv(path: &str, num_persons: usize) {
 
     for pid in 0..num_persons {
         // Pick surname — 2% compound, 98% single
-        let (surname_roman, surname_trad, surname_simp) = if xorshift(&mut rng) % 100 < 2 {
+        let (mut surname_roman, mut surname_trad, mut surname_simp) = if xorshift(&mut rng) % 100 < 2 {
             let idx = (xorshift(&mut rng) % HK_COMPOUND_SURNAMES.len() as u64) as usize;
             let (roman, trad, simp, _) = HK_COMPOUND_SURNAMES[idx];
             (roman.to_string(), trad.to_string(), simp.to_string())
@@ -528,6 +533,54 @@ fn generate_csv(path: &str, num_persons: usize) {
         };
         let phone = format!("{}{:07}", phone_prefix, xorshift(&mut rng) % 10_000_000);
 
+        // Shared numbers: 8% join the previous person's household (same surname,
+        // one landline); 15% have an office switchboard (10% of those at one of
+        // 20 large employers, the rest at one of 20,000 small ones). Half the
+        // time the CRM and English records carry the shared number.
+        let mut shared_phone: Option<String> = None;
+        if shared_phones {
+            let mut household = None;
+            if let Some(prev) = prev_household.as_ref() {
+                if xorshift(&mut rng_shared) % 100 < 8 {
+                    household = Some(prev.clone());
+                }
+            }
+            let (s_roman, s_trad, s_simp, landline) = household.unwrap_or_else(|| {
+                (
+                    surname_roman.clone(),
+                    surname_trad.clone(),
+                    surname_simp.clone(),
+                    format!("3{:07}", xorshift(&mut rng_shared) % 10_000_000),
+                )
+            });
+            surname_roman = s_roman;
+            surname_trad = s_trad;
+            surname_simp = s_simp;
+            let in_household = prev_household
+                .as_ref()
+                .map_or(false, |p| p.3 == landline);
+            prev_household = Some((
+                surname_roman.clone(),
+                surname_trad.clone(),
+                surname_simp.clone(),
+                landline.clone(),
+            ));
+            let office = if xorshift(&mut rng_shared) % 100 < 15 {
+                if xorshift(&mut rng_shared) % 10 == 0 {
+                    Some(format!("2{:07}", xorshift(&mut rng_shared) % 20))
+                } else {
+                    Some(format!("2{:07}", 100 + xorshift(&mut rng_shared) % 20_000))
+                }
+            } else {
+                None
+            };
+            if xorshift(&mut rng_shared) % 2 == 0 {
+                shared_phone = office.or(if in_household { Some(landline) } else { None });
+            }
+        }
+        let personal_phone = phone.clone();
+        let phone = shared_phone.clone().unwrap_or(phone);
+
         // Variant 1: CRM — Chinese with honorific (always)
         {
             let name = format!("{}{}先生", surname_trad, given_trad);
@@ -553,7 +606,7 @@ fn generate_csv(path: &str, num_persons: usize) {
             } else {
                 ""
             };
-            writeln!(file, "BILL-{pid:07},billing,{pid},{name},{dist},{phone}").unwrap();
+            writeln!(file, "BILL-{pid:07},billing,{pid},{name},{dist},{personal_phone}").unwrap();
             total_records += 1;
         }
 
@@ -561,7 +614,7 @@ fn generate_csv(path: &str, num_persons: usize) {
         if xorshift(&mut rng) % 2 == 0 {
             let name = format!("{}{}", surname_simp, given_simp);
             let ph = if xorshift(&mut rng) % 100 < 40 {
-                &phone
+                &personal_phone
             } else {
                 ""
             };
@@ -850,7 +903,7 @@ fn main() {
         eprintln!();
         eprintln!("Commands:");
         eprintln!("  pipeline <input.csv> [job_dir] [--rules <path>]   run full pipeline, write SQLite + CSV");
-        eprintln!("  generate <count> [output.csv]    generate synthetic HK records");
+        eprintln!("  generate <count> [output.csv] [--shared-phones]   generate synthetic HK records");
         eprintln!("  match    <input.csv>              run legacy block-based matching only");
         eprintln!();
         eprintln!("Options:");
@@ -873,8 +926,14 @@ fn main() {
                 .get(3)
                 .map(|s| s.as_str())
                 .unwrap_or("data/demo_records.csv");
-            eprintln!("Generating {} persons → {}", count, path);
-            generate_csv(path, count);
+            let shared_phones = args.iter().any(|a| a == "--shared-phones");
+            eprintln!(
+                "Generating {} persons → {}{}",
+                count,
+                path,
+                if shared_phones { " (with shared phones)" } else { "" }
+            );
+            generate_csv(path, count, shared_phones);
         }
         "match" => {
             let path = args
@@ -918,7 +977,16 @@ fn main() {
 
             // Stage 0: Parse
             eprintln!("=== Stage 0: Parse Records ===");
-            let prepared = dataline::pipeline::stage0_parse(&records, &job);
+            let mut prepared = dataline::pipeline::stage0_parse(&records, &job);
+
+            // Shared phones (office, family) are not identity evidence
+            let (shared_phones, shared_records) =
+                dataline::pipeline::demote_shared_phones(&mut prepared, 2, 8);
+            eprintln!(
+                "  Shared phones: {} numbers on {} records treated as no phone",
+                shared_phones, shared_records
+            );
+            let prepared = prepared;
 
             // Phase 1: Seed clusters (deterministic, zero pairwise cost)
             eprintln!("\n=== Phase 1: Seed Clusters (deterministic) ===");

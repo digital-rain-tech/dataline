@@ -459,6 +459,24 @@ impl NormDict {
     }
 }
 
+/// Give a character missing from a dictionary the entry of its S↔T
+/// counterpart (the Jyutping file has 谭 but not 譚; lookups normalise to
+/// Traditional first, so the surname Tam had no reading). Returns how many
+/// entries were added.
+fn fill_st_variants<V: Clone>(entries: &mut HashMap<char, V>) -> usize {
+    let norm = NormDict::default();
+    let mut added = 0;
+    for (&a, &b) in norm.to_traditional.iter().chain(norm.to_simplified.iter()) {
+        if !entries.contains_key(&b) {
+            if let Some(v) = entries.get(&a).cloned() {
+                entries.insert(b, v);
+                added += 1;
+            }
+        }
+    }
+    added
+}
+
 // ─── Cantonese Phonetic Signal: Jyutping + coordinate distance ───
 
 /// Jyutping dictionary — maps CJK characters to Cantonese pronunciation(s).
@@ -496,6 +514,7 @@ impl JyutpingDict {
             }
         }
 
+        fill_st_variants(&mut entries);
         Self { entries }
     }
 
@@ -800,6 +819,14 @@ impl HkRomanDict {
             }
         }
 
+        if fill_st_variants(&mut char_to_roman) > 0 {
+            roman_to_chars.clear();
+            for (c, variants) in &char_to_roman {
+                for v in variants {
+                    roman_to_chars.entry(v.clone()).or_default().push(*c);
+                }
+            }
+        }
         Self {
             char_to_roman,
             roman_to_chars,
