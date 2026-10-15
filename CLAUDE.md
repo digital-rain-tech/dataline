@@ -50,7 +50,7 @@ Standard ER on sparse CJK records produces a false-positive flood (~118 persons 
 - **Pool A (rich)**: Has phone, DOB, or national ID → safe to auto-merge at lower confidence
 - **Pool B (sparse)**: Name-only → routed to UNRESOLVED cohorts instead of auto-merge
 
-This is what achieves 98.0% precision on the 1M benchmark (35,225 auto-merged pairs).
+On the 1M benchmark the paper reports 98.0% precision (35,225 auto-merged pairs). The current code gives 32,377 matches with 1 false positive (see README, Reproducibility).
 
 ### Matching Signal Stack
 
