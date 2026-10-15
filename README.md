@@ -23,11 +23,13 @@ data/job_1m/matches.csv    — enriched match pairs (open in Excel / pandas)
 
 The `matches.csv` columns: `left_id, left_source, left_name, right_id, right_source, right_name, phase, confidence, rule, correct`
 
-The `correct` column is the ground-truth indicator — `true` when two records belong to the same person, `false` when they don't. On the 1M benchmark: **98.0% precision** on the auto-merge tier, **0% precision** on sparse-record pairwise (which pool separation prevents entirely).
+The `correct` column is the ground-truth indicator — `true` when two records belong to the same person, `false` when they don't. The paper reports **98.0% precision** on the auto-merge tier of the 1M benchmark, and **0% precision** on sparse-record pairwise (which pool separation prevents entirely). See [Reproducibility](#reproducibility) for the current results.
 
 ## Why pool-based?
 
 Standard ER applied to CJK enterprise data produces a false-positive flood on sparse records. The benchmark shows this directly:
+
+Results as published in the paper:
 
 | Phase | Comparisons | Matches | True Positives | Precision |
 |---|---|---|---|---|
@@ -144,16 +146,24 @@ The benchmark uses synthetic data with known ground truth (`person_id`), enablin
 # Run the full pipeline
 cargo run --release --bin dataline-demo -- pipeline data/sample_1m.csv data/job_1m
 
-# Check results
-sqlite3 data/job_1m/results.db "SELECT phase, COUNT(*) as matches, SUM(CASE WHEN correct THEN 1 ELSE 0 END) as true_positives FROM matches GROUP BY phase"
+# Check precision per phase: a match is correct when both records have the same person_id
+sqlite3 data/job_1m/results.db "SELECT m.phase, COUNT(*) AS matches, SUM(a.person_id = b.person_id) AS true_positives FROM matches m JOIN records a ON a.record_id = m.left_id JOIN records b ON b.record_id = m.right_id GROUP BY m.phase"
 ```
 
-**Precision note:** The code has been refined since publication. Current results on the 1M benchmark:
-- Phase 2a: 100% precision
-- Phase 2b: 100% precision  
-- Stage 2: 100% precision (0 false positives on 748k candidate pairs)
+The `correct` column in `matches.csv` holds the same ground-truth check.
 
-The published 98% figure reflects the original code state. The improvement comes from fixes to specific rule edge cases: exact match requiring same token position (not just same tokens), S↔T only for CJK characters (not Latin), phone requiring 7-8 digit prefix (not last 4), and R3d phone corroboration requiring a given name signal. These fixes are verifiable by running the same command above — the ground truth is in the `correct` column.
+**Precision note:** The code has changed since the paper. Current results on the 1M benchmark:
+
+| Phase | Matches | True Positives | Precision |
+|---|---|---|---|
+| Phase 2a (phone-corroborated) | 20,878 | 20,877 | 100.0% |
+| Phase 2b (attractor assignment) | 11,498 | 11,498 | 100.0% |
+| Stage 2 (sparse pairwise, 459,569 pairs) | 1 | 1 | 100.0% |
+| **Total** | **32,377** | **32,376** | **100.0%** |
+
+The one false positive is two different people with the same name and the same phone number.
+
+The published 98% figure reflects the original code state. The changes since then are fixes to specific rule edge cases: exact match requiring same token position (not just same tokens), S↔T only for CJK characters (not Latin), phone requiring 7-8 digit prefix (not last 4), R3d phone corroboration requiring a given name signal, and cross-script given-name matching (陳大文 vs CHAN Tai Man), which compared only the first Latin syllable before. Run the commands above to verify these numbers.
 
 ## License
 

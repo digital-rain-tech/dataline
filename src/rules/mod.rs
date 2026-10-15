@@ -632,6 +632,29 @@ impl RuleMatcher {
         score > 0.7
     }
 
+    fn cjk_given_matches_latin_run(&self, cjk: &[String], latin: &[String]) -> bool {
+        if latin
+            .iter()
+            .any(|t| t.chars().any(|c| tokenizers::is_cjk_char(c)))
+        {
+            return false;
+        }
+        cjk.iter().any(|token| {
+            let chars: Vec<char> = token.chars().collect();
+            if chars.len() < 2 || !chars.iter().all(|c| tokenizers::is_cjk_char(*c)) {
+                return false;
+            }
+            // Every syllable must match its own token. An average over the run
+            // lets one close syllable hide a wrong one (建華 vs "Chun Wai").
+            latin.windows(chars.len()).any(|run| {
+                chars
+                    .iter()
+                    .zip(run)
+                    .all(|(c, t)| self.is_romanization_match(&c.to_string(), t))
+            })
+        })
+    }
+
     fn evaluate_given_names(
         &self,
         a: &[String],
@@ -726,6 +749,15 @@ impl RuleMatcher {
             if best_score > 0.8 {
                 match_count += 1;
             }
+        }
+
+        // CJK given names are one token ("大文"), Latin ones are per syllable
+        // (["Tai", "Man"]), so the token loop above compares 大文 with "Tai" only.
+        // Match each CJK token against a run of consecutive Latin tokens of the
+        // same length. The run allows an extra English name: [慧榮] vs [Wai, Wing, Eric].
+        if !any_romanization {
+            any_romanization = self.cjk_given_matches_latin_run(a, b)
+                || self.cjk_given_matches_latin_run(b, a);
         }
 
         let partial = match_count > 0 && match_count < short.len();
@@ -1280,10 +1312,11 @@ mod tests {
         };
         let nodes = matcher.evaluate_nodes(&a, &b, &a_f, &b_f);
         let decision = matcher.apply_rules(&nodes);
+        // R3d needs a given-name signal, so this falls through to R9
         assert_eq!(
             decision.classification,
-            MatchConfidence::High,
-            "Family + phone match should be High (R3d): {:?}",
+            MatchConfidence::Review,
+            "Family + phone match without given name should be Review (R9): {:?}",
             decision
         );
     }
@@ -1384,6 +1417,23 @@ mod tests {
             "Same phone cross-script should be High: {:?}",
             decision
         );
+    }
+
+    #[test]
+    fn test_cjk_given_matches_latin_run() {
+        let matcher = RuleMatcher::default();
+        let empty = RecordFields::default();
+        let given_roman = |x: &str, y: &str| {
+            let a = names::parse_components(x);
+            let b = names::parse_components(y);
+            matcher.evaluate_nodes(&a, &b, &empty, &empty).given_romanization
+        };
+        assert!(given_roman("陳大文", "CHAN Tai Man"));
+        assert!(given_roman("賴慧榮先生", "LAI Wai Wing, Eric"));
+        assert!(given_roman("安建華先生", "ON Gin Wa, Patrick"));
+        // One close syllable must not carry a wrong one
+        assert!(!given_roman("安建華先生", "ON Chun Wai, James"));
+        assert!(!given_roman("安建華先生", "ON Yuk Jan, Angela"));
     }
 
     // ─── CJK bigram/character Jaccard tests ───
