@@ -32,7 +32,7 @@ Independent Researcher}
 \maketitle
 
 \begin{abstract}
-Entity resolution for CJK enterprise records faces two independent problems: mixed-script variation (Traditional Chinese, Simplified Chinese, Latin romanization) and data incompleteness (most records lack a unique corroborating identifier). A common production pattern addresses the first problem via transliteration and largely ignores the second—either merging low-confidence pairs that corrupt golden records, or discarding unresolvable records entirely. We present Dataline, an open-source Rust-native ER engine that addresses both. For cross-script matching, we compute three independent signals—phonetic (Jyutping/pinyin coordinate distance), visual (stroke-sequence similarity), and normalization (Simplified↔Traditional)—combined via a deterministic rule engine rather than a continuous threshold. For data incompleteness, we introduce a \emph{pool-based} architecture whose core contribution is twofold: (1) using expected per-name collision count as a formal routing criterion to classify records before matching begins, and (2) treating UNRESOLVED as a protected first-class pipeline state rather than a residual failure bucket. Records with low expected collision count (phone, national ID) form validated clusters; records with only high-collision corroborators (district, name only) are held as UNRESOLVED cohorts—never forced through pairwise matching, never merged at low confidence. On a synthetic benchmark of 1 million persons (2.7 million records), standard pairwise ER applied to sparse records produces 112,299 matches with near-zero true positives; pool separation prevents all of these while maintaining 98.0\% precision on corroborated matches. The system is designed for integrity over recall: UNRESOLVED records are not lost, they await a resolution trigger. It processes 2.7 million records in 66 seconds on commodity hardware, compiles to WebAssembly, and is available under Apache 2.0.
+Entity resolution for CJK enterprise records faces two independent problems: mixed-script variation (Traditional Chinese, Simplified Chinese, Latin romanization) and data incompleteness. We present Dataline, an open-source Rust-native ER engine that combines independent phonetic, visual, and normalization signals through a deterministic rule engine. Its pool-based architecture separates phone-corroborated candidate groups from ambiguous district and name-only cohorts. Ten hash passes store group members without expanding all within-group pairs. On a synthetic benchmark of 1 million persons (2.7 million records), the current accepted-link graph achieves 99.9986\% pair precision at 38.4\% pair recall. Name-only passes contain 27.6 million implicit candidate pairs, of which only 0.026\% refer to the same person. Holding these cohorts unresolved limits comparison work and unsupported merges, but early consumption and representative-based validation can also miss valid links. Grouped records are not necessarily resolved, and the pipeline provides no completeness guarantee. We retain historical results separately and distinguish accepted links from review candidates. The engine compiles to WebAssembly and is available under Apache 2.0.
 \end{abstract}
 
 \textbf{Keywords:} entity resolution, CJK matching, cross-script, multi-signal, pool-based, Hong Kong names, Cantonese romanization, open source
@@ -73,7 +73,7 @@ Simonini et al.\ \cite{simonini2022ondemand} propose entity resolution on demand
 
 \subsection{Embedding-Based Blocking}
 
-Wang et al.\ \cite{wang2024neurallsh} propose neural locality-sensitive hashing for learned blocking keys. Ma et al.\ \cite{ma2025rag} combine blocking with retrieval-augmented generation for LLM-based matching. Pre-trained embeddings for ER have been extensively evaluated \cite{skoutas2023embeddings}. Embedding-based blocking imposes a finite candidate horizon: only the top-$k$ nearest neighbours are retained for downstream matching. Although larger $k$ values may improve empirical recall, completeness remains non-deterministic and computational cost scales linearly with candidate set size. For high-stakes domains such as financial compliance, this absence of formal recall guarantees is a material limitation.
+Wang et al.\ \cite{wang2024neurallsh} propose neural locality-sensitive hashing for learned blocking keys. Ma et al.\ \cite{ma2025rag} combine blocking with retrieval-augmented generation for LLM-based matching. Pre-trained embeddings for ER have been extensively evaluated \cite{skoutas2023embeddings}. Embedding-based blocking imposes a finite candidate horizon: only the top-$k$ nearest neighbours are retained for downstream matching. Although larger $k$ values may improve empirical recall, completeness remains non-deterministic and computational cost scales linearly with candidate set size. Dataline's deterministic grouping also provides no complete-recall guarantee: key selection, early consumption, and representative-based validation restrict which true links can be recovered.
 
 %% ============================================================
 \section{Multi-Signal CJK Matching}\label{sec:signals}
@@ -120,7 +120,7 @@ Instead of continuous threshold-based scoring, match decisions are made by deter
 \item \textbf{Corroboration-required rules} (R4–R10): cross-script romanization, high Jaro-Winkler, partial given name—require phone/address/DOB agreement to upgrade confidence
 \end{itemize}
 
-Each decision is traceable to a named rule: ``R3d: family match + phone match'' rather than ``score 0.73 > threshold 0.7.''
+Each decision is traceable to a named rule: ``R3d: family match + given-name signal + phone match'' rather than ``score 0.73 > threshold 0.7.''
 
 %% ============================================================
 \section{Pool-Based Matching Architecture}\label{sec:pools}
@@ -144,16 +144,18 @@ where the expectation is over the target record population $\mathcal{R}$. In pla
 \item \textbf{Pool B (sparse)}: records whose only corroborating evidence has expected collision count $\gg 1$ (district alone, $\sim$6) or no corroboration at all (name only, $\sim$118 per name in the benchmark).
 \end{itemize}
 
-Pool A records form anchor clusters through multi-field exact matching; only phone-corroborated clusters are validated pairwise in Phase~2a (the benchmark dataset contains phone and district only—DOB and email are absent, so phone is the sole low-collision corroborator available). Pool B records are grouped by name into cohorts—never compared against each other—and classified as UNRESOLVED. They are not silently merged; instead they await a resolution trigger that promotes them to Pool~A (e.g., a phone number collected during a subsequent business interaction).
+The collision-count formulation motivates the design. The current batch implementation uses fixed phone-backed versus district/name-only grouping keys; it does not estimate this expectation or calibrate a threshold per record.
+
+Pool A records form candidate anchor groups through multi-field exact grouping; only phone-corroborated groups are validated in Phase~2a. The benchmark contains phone and district only, so phone is the sole low-collision corroborator used here. District and name-only groups remain UNRESOLVED cohorts and are not compared internally. These are design-level interpretations: the current SQLite cluster table stores candidate memberships without explicit MERGED/UNRESOLVED/SINGLETON status values. Accepted identity links are the output rows classified as \texttt{match}; rows classified as \texttt{possible} require review. Cohort membership alone must not be interpreted as identity.
 
 \subsection{Phased Processing Pipeline}
 
 \begin{enumerate}
 \tightlist
-\item \textbf{Phase 1: Multi-field exact grouping} (zero pairwise comparisons). The pass schedule is a deterministic enumeration of every meaningful combination of name variant (exact, S$\leftrightarrow$T normalised, honorific-stripped, romanised) and corroborating field (phone, district), ordered by the number of corroborating signals present. This yields ten hash passes at strictly decreasing confidence—name+phone+district, name+phone, name+district, S$\leftrightarrow$T+phone, romanised+phone, etc.—with no learned ordering or heuristic selection. Records consumed by an earlier pass skip all later passes.
-\item \textbf{Phase 2a: Phone-corroborated cluster validation}. The rule engine validates pairs within Phase~1 clusters that were formed with phone corroboration (passes: exact+phone, S$\leftrightarrow$T+phone, stripped+phone, roman+phone). District-only and name-only clusters are not validated pairwise—they become Pool~B cohorts. Within phone-corroborated clusters the rule engine assigns a confidence level; only matches at \texttt{High} or above are emitted.
-\item \textbf{Phase 2b: Attractor assignment}. Each remaining unmatched record is compared individually against Phase~1 cluster attractors. Richer clusters are evaluated first; a phone pre-filter skips pairs with conflicting phone numbers. A future optimisation would group unmatched records by name before this step, so only one representative per name-group compares against attractors and all group members inherit the result.
-\item \textbf{Stage 2: Pairwise remainder}. Records not consumed by Phase~1 or Phase~2b are passed to traditional block-based pairwise matching. After Phase~1+2 consumption this pool is small.
+\item \textbf{Phase 1: Multi-field exact grouping} (zero pairwise comparisons). The current ordered keys are: exact name+phone+district; exact name+phone; S$\leftrightarrow$T name+phone; stripped name+phone; romanised name+phone; exact name+district; S$\leftrightarrow$T name+district; romanised name+district; stripped name; romanised name. Each hash pass stores member indices rather than enumerating pairs. Grouped records skip later passes, except that later phone passes may add new members to existing phone groups; two existing groups are never merged.
+\item \textbf{Phase 2a: Phone-corroborated validation}. Each phone-group member is compared against the richest representative, giving at most $k-1$ comparisons for a group of size $k$. Only decisions at \texttt{High} or above are emitted as accepted matches. District and name-only cohorts are skipped.
+\item \textbf{Phase 2b: Attractor assignment}. Only ungrouped records with phones are eligible, and only phone-corroborated groups can attract them. Phonetic surname shortlists targets; different phone numbers are rejected before rule evaluation. Grouped records, including rejected Phase~2a members and unresolved cohorts, are not retried.
+\item \textbf{Stage 2: Pairwise remainder}. Ungrouped records are blocked by phonetic surname+district or surname+last four phone digits, falling back to surname alone when both fields are absent. Pairs are enumerated within each residual block, and blocks over 5,000 records are skipped. Phone suffixes retrieve candidates, not establish identity. The pipeline executes once rather than iterating to convergence.
 \end{enumerate}
 
 %% ============================================================
@@ -182,11 +184,11 @@ We implement a component-level name parser that handles: compound surnames (歐�
 
 We generate a dataset of 1 million persons (2,691,721 records) across four source systems: CRM (Chinese + honorific, 80\% phone), Billing (HKID romanization, 100\% phone), Legacy (Simplified Chinese, 40\% phone, 50\% inclusion rate), English (English name only, 70\% phone, 19\% inclusion rate). Given names are drawn as atomic bigram pairs from gender-stratified pools (87 male classic, 70 female classic, 68 Gen~Y/Z across genders) with HK Government Romanization for cross-script consistency. Surnames follow a Zipf distribution over 50 HK surnames plus compound surnames (歐陽, 司徒).
 
-\subsection{Results}
+\subsection{Historical Results}
 
 \begin{table}[h]
 \centering
-\caption{Pipeline performance at 1M scale (2,691,721 records, bigram name generator)}\label{tab:results}
+\caption{Historical pipeline results before the October 2026 recall fixes (2,691,721 records)}\label{tab:results}
 \begin{tabular}{lrrrrr}
 \toprule
 Phase & Comparisons & Matches & TPs & Precision & Recall \\
@@ -201,15 +203,25 @@ Stage 2 (pairwise remainder) & 389,748 & 112,299 & 1 & 0.0\% & — \\
 \end{tabular}
 \end{table}
 
-Phase 2a validates pairs only within phone-corroborated clusters, achieving 100\% precision. Phase 2b (attractor assignment) achieves 95.0\% precision on records matched transitively against cluster attractors. Stage 2 processes the 1.9\% of records not consumed by Phase~1; it generates many rule-based matches but near-zero true positives because those records share only surface name similarity without corroborating fields. The combined Phase~2a+2b precision of 98.0\% represents the auto-merge tier. Records in district-only or name-only clusters are held as UNRESOLVED cohorts pending field enrichment.
+The historical Phase~2a result contains one false positive; 100.0\% is rounded precision, not an error-free guarantee. Historical Phase~2b achieved 95.0\% direct-edge precision, and the combined Phase~2a+2b precision was 98.0\%. The Stage~2 row illustrates the ambiguity of the residual population under that code version. It is not a controlled ablation proving how every alternative matching system would behave.
 
-\subsection{Confidence Strategies}
+\subsection{Current Results and Metric Scope}
 
-The pipeline exposes a configurable auto-merge threshold. The \texttt{strict} strategy restricts to phone-corroborated pairs in both Phase~2a and Phase~2b, achieving $\approx$100\% precision with 28,009 matches—safe for auto-merge without data steward review. The broader \texttt{auto-merge} tier adds S$\leftrightarrow$T and exact-name matches within phone-corroborated clusters, reaching 98.0\% precision at 35,225 matches. In both cases the bound comes from the phone-corroboration requirement, not from the matching rules themselves.
+A fresh run on 2026-10-16 reproduced the current README counts on the unchanged 1M-person input: 825,411 accepted direct edges in Phase~2a, including six false positives; zero Phase~2b comparisons or assignments; and two Stage~2 review candidates, both incorrect, after 264 comparisons. The six accepted false positives have the same full name and phone but different ground-truth identities. Accepted direct-edge precision is 99.999273\%.
 
-\subsection{Performance}
+The accepted-link graph contains 952,357 connected record pairs, of which 952,344 are correct and 13 are wrong: 99.9986\% pair precision and 38.4\% pair recall against 2,479,642 true pairs. The default \texttt{scripts/pair\_metrics.py} includes review candidates for compatibility; that graph contains 952,360 pairs, 16 wrong, and 99.9983\% pair precision at the same recall. Use \texttt{--classification match} for accepted links only. Direct-edge counts and transitive pair counts are different metrics; false edges can amplify through connected components.
 
-Processing 2,691,721 records on a 20-core commodity machine:
+Phase~1 consumed 99.9\% of records, but consumption means grouping rather than resolution. Phone-corroborated candidate groups contain 1,114,564 true pairs (44.9\% candidate recall), while accepted links recover 38.4\%. The name-only stripped pass stores 565,704 records representing 27,414,408 possible pairs, only 7,067 of which are true; the final romanised pass stores 34,726 records representing 148,880 possible pairs, only one true. Combined candidate purity is 0.026\%. These counts use $k(k-1)/2$ per group and ground-truth person counts, without enumerating pairs. They measure candidate ambiguity, not the precision an all-pairs rule-engine run would achieve. They also exclude true pairs crossing group boundaries. The accompanying \texttt{scripts/cohort\_metrics.py} reproduces them from a fresh database and its pass log.
+
+On the shared-phone variant, the README reports 34.9\% pair recall and 99.998\% pair precision using the default graph definition. A number appearing with more than two distinct surname sounds, or on more than eight records, is treated as absent phone evidence. These are synthetic benchmarks, not a validation on enterprise records.
+
+\subsection{Historical Confidence Strategies}
+
+The historical evaluation compared a strict phone-corroborated subset with a broader auto-merge tier. These historical strategy counts must not be read as the current batch CLI's configuration or as a guarantee that false merges cannot occur. Current output classifications and accepted-link metrics are reported separately above.
+
+\subsection{Historical Performance}
+
+The original performance report processed 2,691,721 records on a 20-core commodity machine:
 
 \begin{itemize}
 \tightlist
@@ -220,7 +232,9 @@ Processing 2,691,721 records on a 20-core commodity machine:
 \item Total: 66 seconds (1.1 minutes)
 \end{itemize}
 
-Raw matching speed: 1.7μs per multi-signal CJK comparison (588K comparisons/sec single core). Phase~1 hash grouping consumes 98.1\% of records, leaving only 52,275 for Phase~2b attractor assignment and 37,928 for Stage~2 pairwise—dramatically reducing comparison work relative to a flat pairwise approach.
+These historical timings are not current performance guarantees. The 2026-10-16 verification took 102 seconds with 12 Rayon threads in the available Linux environment; the README records a separate roughly 68-second run on an Apple M2 Max. Hardware, grouping policy, and output costs affect runtime.
+
+Historical raw matching speed: 1.7μs per multi-signal CJK comparison (588K comparisons/sec single core). Phase~1 hash grouping consumes 98.1\% of records, leaving only 52,275 for Phase~2b attractor assignment and 37,928 for Stage~2 pairwise—dramatically reducing comparison work relative to a flat pairwise approach.
 
 %% ============================================================
 \section{Discussion}\label{sec:discussion}
@@ -228,17 +242,17 @@ Raw matching speed: 1.7μs per multi-signal CJK comparison (588K comparisons/sec
 
 \subsection{Interpreting Synthetic Benchmark Results}
 
-The benchmark produces approximately 8,500 unique full-name combinations for 1 million persons—roughly 118 persons sharing each name, consistent with observed collision rates for common HK names. The most informative row in Table~\ref{tab:results} is Stage~2: 389,748 comparisons, 112,299 matches, 1 true positive—0\% precision. Stage~2 runs on records that Phase~1 could not group with a phone-corroborated cluster. It represents what a traditional pairwise ER pipeline would produce if applied to the sparse-record population: a flood of low-confidence matches that would corrupt every golden record they touched. Pool separation prevents all of these; the sparse records become UNRESOLVED cohorts instead.
+The synthetic name pool creates frequent collisions, making name equality insufficient evidence of identity. Historical Stage~2 results demonstrate this risk for that code version. The current name-only cohort counts measure ambiguity directly: 27,563,288 implicit pairs contain only 7,068 true pairs. Holding those cohorts unresolved avoids enumerating their quadratic pair sets. It does not eliminate all sparse-record comparisons: records outside every group still enter the residual pairwise stage.
 
-This paper is not proposing a maximum-recall ER system. It is proposing an \emph{integrity-first} architecture: the system never merges what it cannot corroborate, and it makes the boundary between corroborated and uncorroborated records explicit rather than hiding it behind a threshold. Low auto-merge recall is not a deficiency—it is the expected outcome when the system is working correctly on a population with limited phone coverage. In a domain such as financial compliance, a false merge (two different customers sharing one golden record) is categorically worse than a missed merge (one customer with two records). The benchmark's 1.4\% auto-merge recall reflects the phone coverage of the synthetic dataset; in enterprise deployments with higher phone coverage, pool A membership and auto-merge recall scale proportionally. Records in UNRESOLVED cohorts are not lost—they await a resolution trigger (phone number collected, KYC event, or transitive linkage through a golden record). Validation on real enterprise data remains future work.
+The current system favours precision and misses 61.6\% of true pair links. Missing phones and English-only names explain much of the gap, but not all of it: 57.7\% of true input pairs have phones on both records before shared-phone filtering, 44.9\% occur within phone-backed candidate groups, and 38.4\% are recovered. The former 1.3\% pair recall rose to 38.4\% after correcting pass order, group extension, romanization keys, and dictionary gaps. Low recall therefore cannot be attributed solely to data completeness. Early consumption, grouping-key coverage, rule rejection, and representative-based comparison also restrict recall. These measurements do not isolate the causal recall cost of each restriction; per-pass candidate-recall analysis and controlled ablations remain needed. Grouped records can be reconsidered by a fresh run after enrichment, but the current batch pipeline does not implement an event-driven resolution service. Validation on real enterprise data remains future work.
 
 \subsection{Why Pool Separation Matters}
 
-Without pool separation, sparse records (marketing lists, legacy systems with name only) would produce $O(n^2)$ comparisons within their name group, all at near-zero precision—or worse, generate low-confidence merges that corrupt golden records. Pool separation prevents both outcomes: sparse records are grouped into cohorts (avoiding $O(n^2)$) and classified as UNRESOLVED rather than merged, preserving data integrity until corroborating evidence arrives.
+Enumerating every pair within a cohort of $k$ members requires $O(k^2)$ work; storing the cohort requires $O(k)$ member indices. For a fixed number of hash passes, grouping is expected linear work in record count and key lengths. This does not make the entire pipeline linear: Phase~2b searches candidate attractors, and residual blocks enumerate pairs. Skipping residual blocks above 5,000 members also sacrifices potential links. Integrity and coverage must be measured together rather than inferred from grouping speed.
 
 \subsection{Comparison with Commercial Engines}
 
-Commercial MDM engines use a transliterate → NYSIIS → compare pipeline that loses information at each stage. Our multi-signal approach preserves the original characters, computing phonetic and visual signals independently. The rule-based decision engine (vs.\ continuous threshold scoring) provides auditable match decisions: customers see ``R3d: family match + phone match'' rather than an opaque score.
+Commercial MDM engines use a transliterate → NYSIIS → compare pipeline that loses information at each stage. Our multi-signal approach preserves the original characters, computing phonetic and visual signals independently. The rule-based decision engine (vs.\ continuous threshold scoring) provides auditable match decisions: customers see ``R3d: family match + given-name signal + phone match'' rather than an opaque score.
 
 The pool-based architecture addresses a gap in common approaches: many commercial MDM platforms converged toward a single-golden-record model where multiple views require explicit configuration. Our computed-view model—where the golden record is derived on-demand from linked records via survivorship rules—makes multiple views a natural consequence of the architecture rather than a separate concern.
 
@@ -246,7 +260,7 @@ The pool-based architecture addresses a gap in common approaches: many commercia
 \section{Conclusion}\label{sec:conclusion}
 %% ============================================================
 
-The primary contribution is architectural: treating UNRESOLVED as a first-class record state rather than a residual bucket. Standard pairwise ER applied to sparse CJK records produces a false-positive flood (Stage~2: 112,299 matches, 1 TP); pool-based separation prevents this entirely by routing sparse records to name cohorts rather than the matching pipeline. The multi-signal CJK matching engine provides cross-script coverage (phonetic, visual, S↔T normalization) for the auto-merge tier, with traceable rule-based decisions. The open-source implementation processes 2.7 million records in 66 seconds, compiles to WebAssembly, and is available under Apache 2.0.
+The primary contribution is architectural: preserving ambiguous cohorts alongside corroborated identity links. On the current synthetic benchmark the accepted-link graph achieves 99.9986\% pair precision at 38.4\% pair recall. Ten hash passes avoid expanding name-only cohorts into 27.6 million pairs, but early consumption and representative-based validation also restrict coverage. Accepted matches, review candidates, and candidate memberships must remain distinct when interpreting outputs. The multi-signal engine provides auditable cross-script matching, compiles to WebAssembly, and is available under Apache 2.0.
 
 Future work: ordered cross-script syllable alignment (comparing Jyutping/pinyin sequences directly against romanized tokens to improve recall for records without phone corroboration), and validation on real enterprise data where phone coverage and name pool sizes differ from the synthetic benchmark.
 

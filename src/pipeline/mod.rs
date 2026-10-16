@@ -81,7 +81,7 @@ pub struct SeedCluster {
     /// Surname phonetic key (for Phase 2 lookup).
     pub surname_key: String,
     /// Whether this cluster was formed with phone corroboration.
-    /// Only phone-corroborated clusters are validated in Phase 2a (100% precision tier).
+    /// Only phone-corroborated clusters are validated in Phase 2a.
     /// District-only and name-only clusters are cohort candidates — Phase 2a skips them.
     pub phone_corroborated: bool,
 }
@@ -417,7 +417,8 @@ pub fn stage1_build_blocks_filtered(
 // ─── Phase 1: Seed Clusters (deterministic hash grouping, zero pairwise cost) ───
 
 /// Build seed clusters from exact and near-exact matches using hash grouping.
-/// Three passes: exact name, S↔T normalized, honorific-stripped.
+/// Ten hash-grouping passes: phone-backed keys first, then district/name cohorts.
+/// Groups store member indices, not pairwise comparisons or accepted matches.
 /// Returns seed clusters and the set of consumed record indices.
 pub fn phase1_seed_clusters(
     prepared: &[PreparedRecord],
@@ -765,7 +766,7 @@ pub fn phase2a_validate_clusters(
         if cluster.member_indices.len() < 2 {
             continue;
         }
-        // Only validate within phone-corroborated clusters (100% precision tier).
+        // Only validate within phone-corroborated clusters.
         // District-only and name-only clusters are cohort candidates, not match output.
         if !cluster.phone_corroborated {
             continue;

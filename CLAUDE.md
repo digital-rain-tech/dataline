@@ -47,10 +47,14 @@ Checkpoints mean a crashed run resumes from the last completed stage.
 
 Standard ER on sparse CJK records produces a false-positive flood (~118 persons share a common name+district combination). The engine classifies records by richness before matching:
 
-- **Pool A (rich)**: Has phone, DOB, or national ID → safe to auto-merge at lower confidence
+- **Pool A (rich)**: Current phone-backed candidate groups require rule-engine validation; DOB/national ID are part of the broader design, not keys in the current ten-pass grouping schedule
 - **Pool B (sparse)**: Name-only → routed to UNRESOLVED cohorts instead of auto-merge
 
-On the 1M benchmark the paper reports 98.0% precision (35,225 auto-merged pairs). The current code gives 32,377 matches with 1 false positive (see README, Reproducibility).
+The paper retains historical results. Current 1M-person benchmark: 825,411 accepted direct match edges, six wrong; accepted-link graph pair precision 99.9986%, pair recall 38.4%. Two additional residual rows are `possible` review candidates. The default pair-metrics script includes both classes; use `--classification match` for accepted links only. See README, Reproducibility.
+
+Phase 1 runs ten hash-grouping passes, all five phone passes before district and name-only cohorts. Hash groups store member indices without enumerating pairs. Grouped records skip later passes, except that a phone pass may extend an existing phone group with new members. Phase 2a compares each phone-group member with its richest representative; cohorts are skipped. Phase 2b only retries ungrouped records with phones against phone groups. Consumed means grouped, not validated: even rejected members and unresolved cohorts do not enter later matching. Grouping coverage is not recall, and there is no complete-recall guarantee. Residual blocks still enumerate pairs and skip blocks over 5,000 records.
+
+The `clusters` SQLite table contains candidate cohorts as well as phone-backed groups; its memberships must not be treated as accepted identity links. MERGED/UNRESOLVED/SINGLETON describe the design, but are not persisted as explicit status values in that table.
 
 ### Matching Signal Stack
 
@@ -59,7 +63,7 @@ For each candidate pair, three signals fire:
 2. **Visual**: Levenshtein on stroke sequences (catches OCR errors; phonetic alone fails here)
 3. **Normalization**: Simplified↔Traditional character mapping
 
-The rule engine (`src/rules/mod.rs`) combines node evaluations deterministically into match decisions — no ML, fully auditable (e.g., rule code `R3d: family match + phone match`).
+The rule engine (`src/rules/mod.rs`) combines node evaluations deterministically into match decisions — no ML, fully auditable (e.g., rule code `R3d: family match + given-name signal + phone match`).
 
 ### Key Type Relationships
 

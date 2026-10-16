@@ -2,7 +2,7 @@
 
 CJK-native entity resolution engine, built in Rust.
 
-Dataline resolves mixed-script customer records — `陳大文` / `Chan Tai Man` / `CHAN, Tai-Man` / `陈大文` — using phonetic, visual, and normalization signals rather than transliterate-to-Latin approaches. It introduces a **pool-based architecture** that separates records by data completeness before matching, preventing sparse records from generating false merges.
+Dataline resolves mixed-script customer records — `陳大文` / `Chan Tai Man` / `CHAN, Tai-Man` / `陈大文` — using phonetic, visual, and normalization signals rather than transliterate-to-Latin approaches. Its **pool-based architecture** holds ambiguous name-only groups unresolved. On the current synthetic benchmark, accepted matches achieve **99.9986% pair precision at 38.4% pair recall**: accurate emitted links, with most true pair links still undiscovered.
 
 **Paper:** [Pool-Based Entity Resolution for Mixed-Script CJK Records](paper/dataline.pdf)
 
@@ -23,7 +23,7 @@ data/job_1m/matches.csv    — enriched match pairs (open in Excel / pandas)
 
 The `matches.csv` columns: `left_id, left_source, left_name, right_id, right_source, right_name, phase, confidence, rule, correct`
 
-The `correct` column is the ground-truth indicator — `true` when two records belong to the same person, `false` when they don't. The paper reports **98.0% precision** on the auto-merge tier of the 1M benchmark, and **0% precision** on sparse-record pairwise (which pool separation prevents entirely). See [Reproducibility](#reproducibility) for the current results.
+The `correct` column is the ground-truth indicator — `true` when two records belong to the same person, `false` when they don't. The `confidence` column distinguishes accepted `match` rows from `possible` rows requiring review. Neither a candidate group nor a review candidate is an accepted identity link. See [Reproducibility](#reproducibility) for current precision and recall; the paper also retains historical results.
 
 ## Why pool-based?
 
@@ -39,7 +39,7 @@ Results as published in the paper:
 | Stage 2 (sparse pairwise) | 389,748 | 112,299 | 1 | **0.0%** |
 | **Total auto-merge (2a+2b)** | | **35,225** | **34,513** | **98.0%** |
 
-Stage 2 is what happens without pool separation: 112,299 matches, 1 true positive. Pool separation routes those records to UNRESOLVED cohorts instead.
+This historical Stage 2 result motivates holding ambiguous records in unresolved cohorts. The current pipeline still runs pairwise matching on records left outside all groups; it does not eliminate every possible sparse-record comparison.
 
 ## Why not just transliterate to Latin?
 
@@ -60,22 +60,51 @@ That's the common production pattern: convert CJK to pinyin, run NYSIIS, compare
 | **Visual** | Stroke sequence similarity (20,901-char dictionary) | OCR errors, wrong radical, handwriting variants |
 | **Normalization** | Simplified ↔ Traditional mapping | Cross-system script variants |
 
-Signals are combined via a deterministic rule engine (not a continuous threshold), producing traceable decisions: `R3d: family match + phone match` rather than `score 0.73 > threshold 0.7`.
+Signals are combined via a deterministic rule engine (not a continuous threshold), producing traceable decisions: `R3d: family match + given-name signal + phone match` rather than `score 0.73 > threshold 0.7`.
 
 ### Pool-based pipeline
 
-Records are classified by **expected collision count** before matching:
+The design uses **expected collision count** to motivate separating rich and sparse records:
 
 - **Pool A (rich)**: records with a low-collision corroborator (phone, national ID, DOB) — expected < ~1 person per name+field combination → form validated anchor clusters
 - **Pool B (sparse)**: name-only or name+district records — expected ~6–118 persons per combination → classified as UNRESOLVED cohorts, never merged at low confidence
 
+The current batch pipeline implements this distinction with phone-corroborated groups and district/name-only cohorts. It does not estimate a collision count for every record or use national ID/DOB as grouping keys in these ten passes.
+
 Pipeline phases:
 1. **Phase 1** — Zero-comparison hash grouping across 10 name variant × corroborator combinations
-2. **Phase 2a** — Rule-engine validation within phone-corroborated clusters (100% precision)
-3. **Phase 2b** — Attractor assignment: remaining records compared against cluster drivers
+2. **Phase 2a** — Rule-engine validation against the richest member of each phone-corroborated group
+3. **Phase 2b** — Ungrouped records with phones compared against phone-corroborated cluster drivers
 4. **Stage 2** — Traditional pairwise on the small residual population
 
-Output states: **MERGED** (auto-merge safe), **UNRESOLVED** (cohort awaiting enrichment), **SINGLETON**.
+Interpretation: **MERGED** refers to accepted links, **UNRESOLVED** to ambiguous cohorts, and **SINGLETON** to records outside cohorts with no accepted links. The SQLite `clusters` table stores candidate memberships, including unresolved cohorts; membership alone is not evidence that records identify one person. The table does not currently persist these three states as explicit status values.
+
+### How the ten passes find candidates
+
+Phase 1 hashes records into groups using these keys, in order:
+
+| Pass | Key |
+|---|---|
+| 1 | Exact name + phone + district |
+| 2 | Exact name + phone |
+| 3 | Simplified/Traditional normalized name + phone |
+| 4 | Honorific-stripped, normalized name + phone |
+| 5 | Romanized name + phone |
+| 6 | Exact name + district |
+| 7 | Simplified/Traditional normalized name + district |
+| 8 | Romanized name + district |
+| 9 | Honorific-stripped, normalized name |
+| 10 | Romanized name |
+
+Each pass stores `key → record indices`; it does not enumerate the pairs inside a group. Expected grouping work is linear in the input and key lengths for a fixed number of passes. A name-only group of 10,000 records stores 10,000 indices rather than materializing roughly 50 million pairs.
+
+Earlier groups remain stored. Their members skip later passes, except that later phone passes can add ungrouped records to an existing phone-corroborated group. Existing groups are not merged with one another. All phone passes precede district and name-only passes.
+
+Phase 2a makes at most `k − 1` comparisons for a phone group of size `k`, using its richest member as the representative. District and name-only groups are skipped. Phase 2b considers only ungrouped records with phones and only phone-corroborated target groups, shortlisting by phonetic surname and rejecting different phone numbers before rule evaluation.
+
+**Consumed means grouped, not successfully matched.** Cohort members and records rejected during Phase 2a are not retried in Phase 2b or the residual pairwise stage. This saves comparisons but can hide valid links across groups. The pipeline runs this sequence once; it does not repeat until no further links can be found.
+
+Residual blocking uses phonetic surname + district, or surname + the last four phone digits, falling back to surname alone when both are absent. Those blocks do enumerate pairs and remain quadratic within each block; blocks larger than 5,000 records are skipped. The last four digits retrieve candidates, not establish identity. There is no general linear-time or complete-recall guarantee for the full pipeline.
 
 ### Hong Kong name handling
 
@@ -154,23 +183,52 @@ The `correct` column in `matches.csv` holds the same ground-truth check.
 
 **Precision note:** The code has changed since the paper. Current results on the 1M benchmark (12-core Apple M2 Max, about 68 s):
 
-| Phase | Matches | True Positives | Precision |
-|---|---|---|---|
-| Phase 2a (phone-corroborated) | 825,411 | 825,405 | 100.0% |
-| Phase 2b (attractor assignment) | 0 | — | — |
-| Stage 2 (sparse pairwise, 264 pairs) | 2 | 0 | 0.0% |
-| **Total** | **825,413** | **825,405** | **100.0%** |
+| Phase | Output classification | Rows | True positives | Direct-edge precision |
+|---|---|---|---|---|
+| Phase 2a (phone-corroborated) | `match` | 825,411 | 825,405 | 99.999273% |
+| Phase 2b (attractor assignment) | — | 0 | — | — |
+| Stage 2 (264 comparisons) | `possible` | 2 | 0 | 0.0% |
+| **All output rows** | **Both classes** | **825,413** | **825,405** | **99.999031%** |
 
-The six false positives in Phase 2a are pairs of different people with the same full name and the same phone number.
+The six false positives in Phase 2a are pairs of different people with the same full name and the same phone number. The two residual outputs are review candidates, not accepted matches. Older displays rounded precision to `100.0%`; this does not mean zero false positives. A fresh run on 2026-10-16 reproduced these counts in 102 seconds with 12 Rayon threads in the available Linux environment; runtime depends on hardware.
 
 **Recall.** Precision alone hides how much is linked. Counting the record pairs joined by any chain of matches (`python3 scripts/pair_metrics.py data/job_1m/results.db`), the 1M benchmark has 2,479,642 same-person pairs:
 
 | Code | Linked pairs | Wrong | Pair precision | Pair recall |
 |---|---|---|---|---|
 | Before the October 2026 fixes | 33,236 | 1 | 99.997% | 1.3% |
-| Current | 952,360 | 16 | 99.998% | 38.4% |
+| Current, all output rows | 952,360 | 16 | 99.9983% | 38.4% |
+| Current, accepted `match` rows only | 952,357 | 13 | 99.9986% | 38.4% |
 
-Most of the rest is by design: a record with no phone (20% of CRM, 60% of Legacy and 30% of English records) has no corroborator and stays UNRESOLVED, and an English-only name (`Kenneth Tam`) carries no Chinese given name to check.
+The default metrics script includes `possible` rows in its graph for compatibility with earlier reports. To measure accepted links separately:
+
+```bash
+python3 scripts/pair_metrics.py data/job_1m/results.db --classification match
+```
+
+Both current graphs recover 952,344 correct pairs and miss 1,527,298, or **61.6% of true pairs**. This is pair recall, not the fraction of people resolved. Direct-edge precision counts emitted pairs; pair precision also counts pairs connected through chains, which can amplify a false link. Grouping consumed 99.9% of records in the fresh run, but that is not a resolution rate.
+
+Missing phones and English-only names explain much of the gap, but not all of it. In the unchanged input, 1,429,619 true pairs (57.7%) have a phone on both records, before shared-phone demotion. Phone-corroborated candidate groups contain 1,114,564 true pairs (44.9% of all true pairs); validation and representative-based comparison recover 38.4%. Grouping restrictions, unavailable romanization variants, and rule rejection also affect recall. These aggregate counts do not isolate how many links are lost specifically because a cohort is marked consumed.
+
+### Why name-only cohorts are held unresolved
+
+Counting the implicit pairs inside the fresh run's cohorts, without enumerating them:
+
+| Cohort pass | Members | Possible within-cohort pairs | Same-person pairs |
+|---|---|---|---|
+| 9: Stripped name | 565,704 | 27,414,408 | 7,067 |
+| 10: Romanized name | 34,726 | 148,880 | 1 |
+
+Only **0.026%** of these 27,563,288 pairs identify the same person. This measures candidate ambiguity, not the precision the rule engine would achieve if every pair were evaluated. Hash grouping avoids that comparison workload, and holding the cohorts unresolved avoids forcing identity decisions on name alone. The counts exclude true pairs spanning different groups, so they do not measure the full recall cost of consumption.
+
+Reproduce the cohort counts from a fresh job and its log:
+
+```bash
+cargo run --release --bin dataline-demo -- pipeline data/sample_1m.csv data/job_quality 2>&1 | tee data/job_quality.log
+python3 scripts/cohort_metrics.py data/job_quality/results.db data/job_quality.log
+```
+
+The helper uses cumulative cluster-ID boundaries from the pass log, counts pairs as `k × (k − 1) / 2`, and uses `person_id` only for evaluation. These synthetic benchmark results do not establish accuracy on enterprise data.
 
 **Shared phones.** An office switchboard or a family landline is not evidence that two records are one person. A number seen with more than two surname sounds, or on more than eight records, is treated as no phone. To test this, generate a variant of the sample in which 15% of people have an office number (some at 20 large employers) and 8% share a household landline, carried on their CRM and English records half the time:
 
